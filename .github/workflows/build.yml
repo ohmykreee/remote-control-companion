@@ -1,0 +1,84 @@
+# CI/CD for the portable Windows amd64 build.
+#
+# Pull requests run the reusable checks workflow only. Pushes to main and manual
+# dispatches also build the portable folder and upload it as an artifact.
+# There is intentionally no release/publish workflow yet.
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: checks
+    uses: ./.github/workflows/checks.yml
+
+  portable:
+    name: portable (windows-amd64)
+    if: github.event_name != 'pull_request'
+    needs: checks
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 12.8.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 26.7.0
+          cache: pnpm
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v2.0.0
+        with:
+          toolchain: 1.99.1
+          cache: false
+
+      - name: Cache cargo registry
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+
+      - name: Build portable Windows amd64 package
+        run: pnpm run dist
+
+      - name: Verify portable package
+        shell: pwsh
+        run: |
+          $root = "release/DSH-Remote-Companion-win-x64"
+          $zip = "release/DSH-Remote-Companion-win-x64.zip"
+          if (-not (Test-Path "$root/DSHRemoteCompanion.exe")) { throw "missing executable" }
+          if (-not (Test-Path "$root/Data")) { throw "missing Data placeholder" }
+          if (-not (Test-Path $zip)) { throw "missing portable zip" }
+          Get-Item "$root/DSHRemoteCompanion.exe", $zip | Select-Object Name, Length
+
+      - name: Upload portable artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: DSH-Remote-Companion-win-x64
+          path: release/DSH-Remote-Companion-win-x64.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14

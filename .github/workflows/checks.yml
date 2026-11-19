@@ -1,0 +1,68 @@
+# Reusable Windows amd64 gate. The build workflow calls this before packaging.
+#
+# The application is Windows-only, so everything runs on windows-latest:
+#   * Svelte/TypeScript checks and the production frontend build
+#   * Rust tests compiled AND executed for x86_64-pc-windows-msvc
+#
+# `pnpm build` must run before `cargo test`: the Tauri context embeds the
+# production `dist/` assets at compile time.
+name: Checks
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows-amd64:
+    name: checks (windows-amd64)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 12.8.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 26.7.0
+          cache: pnpm
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v2.0.0
+        with:
+          toolchain: 1.99.1
+          target: x86_64-pc-windows-msvc
+          cache: false
+
+      - name: Cache cargo registry
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+
+      - name: Typecheck frontend
+        run: pnpm check
+
+      - name: Build production frontend
+        run: pnpm build
+
+      - name: Compile Windows amd64 tests
+        run: pnpm run test:rust:compile
+
+      - name: Run Windows amd64 tests
+        run: pnpm run test:rust

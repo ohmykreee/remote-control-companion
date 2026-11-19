@@ -1,0 +1,12 @@
+node_modules/
+dist/
+release/
+Data/
+src-tauri/target/
+src-tauri/gen/
+*.log
+.DS_Store
+Thumbs.db
+.scratch/
+build/*
+!build/data-placeholder/

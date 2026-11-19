@@ -1,0 +1,48 @@
+# Normalize text files to LF for consistent diffs across Windows/Linux checkouts.
+* text=auto eol=lf
+
+*.svelte text eol=lf
+*.ts text eol=lf
+*.js text eol=lf
+*.mjs text eol=lf
+*.cjs text eol=lf
+*.rs text eol=lf
+*.toml text eol=lf
+*.json text eol=lf
+*.jsonc text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+*.html text eol=lf
+*.css text eol=lf
+*.svg text eol=lf
+*.txt text eol=lf
+*.gitignore text eol=lf
+*.gitattributes text eol=lf
+
+# Windows-only scripts stay CRLF for native tooling.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Generated lockfiles are diff-noise only.
+pnpm-lock.yaml text eol=lf linguist-generated=true
+src-tauri/Cargo.lock text eol=lf linguist-generated=true
+
+# Binary assets.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.gif binary
+*.ico binary
+*.icns binary
+*.dll binary
+*.exe binary
+*.zip binary
+*.7z binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.pdf binary
