@@ -210,3 +210,25 @@
 .animate-fade-up {
   animation: fade-up 260ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
+
+.reduce-motion *,
+.reduce-motion *::before,
+.reduce-motion *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+
+/* Keep every modal below the draggable app titlebar. The titlebar remains
+   above the overlay, so it stays sharp and usable while settings/about are open. */
+[data-slot="dialog-overlay"] {
+  inset: var(--titlebar-height) 0 0 0;
+}
+
+[data-slot="dialog-content"] {
+  top: calc(50% + (var(--titlebar-height) / 2));
+  max-height: calc(100vh - var(--titlebar-height) - 24px);
+}
+

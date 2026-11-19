@@ -1,5 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 
+export type EdgeSide = 'top' | 'left' | 'right';
+
 export interface Settings {
   version: number;
   remote_url: string;
@@ -9,6 +11,11 @@ export interface Settings {
   replace_clipboard_with_vr: boolean;
   delay_vr_capture: boolean;
   force_secure_context: boolean;
+  window_opacity: number;
+  boss_key: string;
+  edge_autohide: boolean;
+  edge_autohide_edges: EdgeSide[];
+  reduce_motion: boolean;
 }
 
 export interface AppInfo {
@@ -40,11 +47,17 @@ export const DEFAULT_SETTINGS: Settings = {
   replace_clipboard_with_vr: false,
   delay_vr_capture: false,
   force_secure_context: false,
+  window_opacity: 100,
+  boss_key: '',
+  edge_autohide: false,
+  edge_autohide_edges: ['right'],
+  reduce_motion: false,
 };
 
 export const api = {
   bootstrap: () => invoke<Bootstrap>('get_bootstrap'),
   saveSettings: (settings: Settings) => invoke<Settings>('save_settings', { settings }),
+  setWindowOpacity: (opacity: number) => invoke<void>('set_window_opacity', { opacity }),
   openRemote: (address: string, remember: boolean) =>
     invoke<LayoutState>('open_remote', { address, remember }),
   refreshRemote: () => invoke<LayoutState>('refresh_remote'),

@@ -15,10 +15,20 @@
     open?: boolean;
     onOpenChange?: (open: boolean) => void;
   } = $props();
+
+  function keepTitlebarUsable(event: PointerEvent): void {
+    const target = event.target;
+    if (target instanceof Element && target.closest('.titlebar')) {
+      event.preventDefault();
+    }
+  }
 </script>
 
 <Dialog.Root bind:open {onOpenChange}>
-  <Dialog.Content class="about-dialog w-[calc(100vw-3rem)] max-w-[560px] gap-0 p-0 sm:max-w-[520px]">
+  <Dialog.Content
+    class="about-dialog w-[calc(100vw-3rem)] max-w-[560px] gap-0 p-0 sm:max-w-[520px]"
+    onInteractOutside={keepTitlebarUsable}
+  >
     <div class="about-head">
       <div class="about-glow"></div>
       <img class="about-mark" src={appIcon} alt="" aria-hidden="true" />

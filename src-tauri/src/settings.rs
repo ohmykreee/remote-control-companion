@@ -15,7 +15,15 @@ pub struct Settings {
     pub replace_clipboard_with_vr: bool,
     pub delay_vr_capture: bool,
     pub force_secure_context: bool,
+    pub window_opacity: u8,
+    pub boss_key: String,
+    pub edge_autohide: bool,
+    pub edge_autohide_edges: Vec<String>,
+    pub reduce_motion: bool,
 }
+
+pub const MIN_WINDOW_OPACITY: u8 = 5;
+pub const EDGE_SIDES: [&str; 3] = ["top", "left", "right"];
 
 impl Default for Settings {
     fn default() -> Self {
@@ -28,6 +36,11 @@ impl Default for Settings {
             replace_clipboard_with_vr: false,
             delay_vr_capture: false,
             force_secure_context: false,
+            window_opacity: 100,
+            boss_key: String::new(),
+            edge_autohide: false,
+            edge_autohide_edges: vec!["right".to_string()],
+            reduce_motion: false,
         }
     }
 }
@@ -55,6 +68,20 @@ impl Settings {
         if !self.replace_clipboard_with_vr {
             self.delay_vr_capture = false;
         }
+        self.window_opacity = self
+            .window_opacity
+            .clamp(MIN_WINDOW_OPACITY, 100);
+        self.boss_key = self.boss_key.trim().to_string();
+        if self.boss_key.len() > 64 {
+            self.boss_key.truncate(64);
+        }        let mut edges = Vec::new();
+        for edge in &self.edge_autohide_edges {
+            let normalized = edge.trim().to_ascii_lowercase();
+            if EDGE_SIDES.contains(&normalized.as_str()) && !edges.contains(&normalized) {
+                edges.push(normalized);
+            }
+        }
+        self.edge_autohide_edges = edges;
     }
 }
 
@@ -91,6 +118,37 @@ pub fn save(settings: &Settings) -> Result<(), String> {
         })?;
     }
     write_atomic(&path, settings)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_clamps_opacity_and_normalizes_edges() {
+        let mut settings = Settings {
+            window_opacity: 0,
+            edge_autohide_edges: vec![
+                "LEFT".to_string(),
+                "left".to_string(),
+                "center".to_string(),
+            ],
+            ..Settings::default()
+        };
+        settings.sanitize();
+        assert_eq!(settings.window_opacity, MIN_WINDOW_OPACITY);
+        assert_eq!(settings.edge_autohide_edges, vec!["left".to_string()]);
+    }
+
+    #[test]
+    fn sanitize_allows_no_edge_directions() {
+        let mut settings = Settings {
+            edge_autohide_edges: Vec::new(),
+            ..Settings::default()
+        };
+        settings.sanitize();
+        assert!(settings.edge_autohide_edges.is_empty());
+    }
 }
 
 fn write_atomic(path: &Path, settings: &Settings) -> Result<(), String> {

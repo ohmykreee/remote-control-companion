@@ -23,6 +23,13 @@
     void companion.init();
   });
 
+  $effect(() => {
+    document.documentElement.classList.toggle(
+      'reduce-motion',
+      companion.settings.reduce_motion,
+    );
+  });
+
   async function captureBackdrop(): Promise<void> {
     if (backdropTask) return backdropTask;
     backdropTask = (async () => {
@@ -89,6 +96,13 @@
     if (!open) maybeReleaseOverlay();
   }
 
+  function keepTitlebarUsable(event: PointerEvent): void {
+    const target = event.target;
+    if (target instanceof Element && target.closest('.titlebar')) {
+      event.preventDefault();
+    }
+  }
+
   function aboutChanged(open: boolean): void {
     if (!open) maybeReleaseOverlay();
   }
@@ -130,7 +144,10 @@
   </div>
 
   <Dialog.Root bind:open={settingsOpen} onOpenChange={settingsChanged}>
-    <Dialog.Content class="settings-dialog max-w-[calc(100vw-2rem)] gap-0 p-0 sm:max-w-[640px]">
+    <Dialog.Content
+      class="settings-dialog max-w-[calc(100vw-2rem)] gap-0 p-0 sm:max-w-[640px]"
+      onInteractOutside={keepTitlebarUsable}
+    >
       <Dialog.Header class="settings-dialog-head">
         <Dialog.Title class="dialog-title">设置</Dialog.Title>
         <Dialog.Description class="dialog-description">{copy.settings.subtitle}</Dialog.Description>

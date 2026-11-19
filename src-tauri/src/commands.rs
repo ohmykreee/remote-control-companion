@@ -9,6 +9,7 @@ use crate::logging;
 use crate::remote;
 use crate::settings::{self, Settings};
 use crate::state::{AppState, RuntimeState};
+use crate::window_behavior;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AppInfo {
@@ -90,14 +91,44 @@ pub fn get_bootstrap(app: AppHandle) -> Bootstrap {
 }
 
 #[tauri::command]
-pub fn save_settings(settings: Settings, app: AppHandle) -> Result<Settings, String> {
+pub async fn save_settings(app: AppHandle, settings: Settings) -> Result<Settings, String> {
+    tauri::async_runtime::spawn_blocking(move || save_settings_blocking(app, settings))
+        .await
+        .map_err(|error| format!("保存设置时任务中断，请重试（{error}）。"))?
+}
+
+fn save_settings_blocking(app: AppHandle, settings: Settings) -> Result<Settings, String> {
     let mut next = settings;
     next.sanitize();
     settings::save(&next)?;
     let state = app.state::<AppState>();
-    let mut runtime = lock(&state);
-    runtime.settings = next.clone();
+    let previous_key = {
+        let mut runtime = lock(&state);
+        let previous_key = runtime.settings.boss_key.clone();
+        runtime.settings = next.clone();
+        previous_key
+    };
+
+    if let Some(window) = app.get_window(layout::WINDOW_LABEL) {
+        window_behavior::apply_opacity(&window, next.window_opacity)?;
+    }
+    if previous_key != next.boss_key {
+        window_behavior::change_boss_key(&app, &previous_key, &next.boss_key)?;
+    }
+    if !next.edge_autohide {
+        if let Some(window) = app.get_window(layout::WINDOW_LABEL) {
+            window_behavior::restore_hidden_window(&window);
+        }
+    }
     Ok(next)
+}
+
+#[tauri::command]
+pub fn set_window_opacity(app: AppHandle, opacity: u8) -> Result<(), String> {
+    let window = app
+        .get_window(layout::WINDOW_LABEL)
+        .ok_or_else(|| "主窗口没有准备好。".to_string())?;
+    window_behavior::apply_opacity(&window, opacity)
 }
 
 #[tauri::command]

@@ -1,13 +1,16 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import Minus from '@lucide/svelte/icons/minus';
   import Square from '@lucide/svelte/icons/square';
   import X from '@lucide/svelte/icons/x';
+  import { listen } from '@tauri-apps/api/event';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { Button } from '$lib/components/ui/button/index.js';
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu/index.js';
   import { companion } from '$lib/state.svelte';
   import { api } from '$lib/api';
   import { copy } from '$lib/copy';
+  import { toast } from '$lib/toast';
 
   let {
     onOpenSettings,
@@ -23,10 +26,47 @@
 
   const appWindow = getCurrentWindow();
   let menuOpen = $state(false);
+  let alwaysOnTop = $state(false);
+  let remoteTheme = $state<'light' | 'dark'>('dark');
+  const light = $derived(companion.isRemote && remoteTheme === 'light');
+
+  onMount(() => {
+    void refreshAlwaysOnTop();
+    let stopThemeListener: (() => void) | undefined;
+    void listen<string>('remote-theme', (event) => {
+      remoteTheme = event.payload === 'light' ? 'light' : 'dark';
+    })
+      .then((unlisten) => {
+        stopThemeListener = unlisten;
+      })
+      .catch(() => {
+        // The titlebar keeps its dark fallback if events are unavailable.
+      });
+    return () => stopThemeListener?.();
+  });
+
+  async function refreshAlwaysOnTop(): Promise<void> {
+    try {
+      alwaysOnTop = await appWindow.isAlwaysOnTop();
+    } catch {
+      // Keep the last known state if the platform cannot answer.
+    }
+  }
+
+  async function toggleAlwaysOnTop(): Promise<void> {
+    const next = !alwaysOnTop;
+    try {
+      await appWindow.setAlwaysOnTop(next);
+      alwaysOnTop = next;
+    } catch {
+      toast(copy.titlebar.alwaysOnTopFailed, 'error');
+    }
+  }
 
   function handleMenuOpenChange(open: boolean): void {
     menuOpen = open;
     if (open) {
+      void refreshAlwaysOnTop();
       onMenuOpened();
     } else {
       window.setTimeout(onMenuClosed, 0);
@@ -67,7 +107,7 @@
   }
 </script>
 
-<div class="titlebar">
+<div class="titlebar" class:light>
   <div class="titlebar-drag" data-tauri-drag-region aria-hidden="true"></div>
   <DropdownMenu.Root bind:open={menuOpen} onOpenChange={handleMenuOpenChange}>
     <DropdownMenu.Trigger>
@@ -82,14 +122,25 @@
         </Button>
       {/snippet}
     </DropdownMenu.Trigger>
-    <DropdownMenu.Content class="app-menu min-w-[164px]" sideOffset={5} align="start">
+    <DropdownMenu.Content
+      class="app-menu min-w-[164px] {light ? 'app-menu-light' : ''}"
+      sideOffset={5}
+      align="start"
+    >
+      <DropdownMenu.Item
+        class="app-menu-item"
+        onSelect={() => void toggleAlwaysOnTop()}
+      >
+        {alwaysOnTop ? copy.titlebar.cancelAlwaysOnTop : copy.titlebar.alwaysOnTop}
+      </DropdownMenu.Item>
+      <DropdownMenu.Separator class="app-menu-separator my-1" />
       <DropdownMenu.Item class="app-menu-item" onSelect={openSettings}>
         {copy.titlebar.settings}
       </DropdownMenu.Item>
       <DropdownMenu.Item class="app-menu-item" onSelect={openAbout}>
         {copy.titlebar.about}
       </DropdownMenu.Item>
-      <DropdownMenu.Separator class="my-1" />
+      <DropdownMenu.Separator class="app-menu-separator my-1" />
       <DropdownMenu.Item class="app-menu-item" onSelect={quit}>
         {copy.titlebar.quit}
       </DropdownMenu.Item>
@@ -157,9 +208,13 @@
     background: #0b0f16;
     border-bottom: 1px solid rgb(255 255 255 / 6%);
     position: relative;
-    z-index: 30;
+    z-index: 60;
+    pointer-events: auto;
     -webkit-user-select: none;
     user-select: none;
+    transition:
+      background-color 160ms ease,
+      border-color 160ms ease;
   }
 
   .titlebar-drag {
@@ -245,5 +300,53 @@
   :global(.app-menu-item:focus) {
     background: rgb(95 122 255 / 13%);
     color: #f3f6ff;
+  }
+
+  .titlebar.light {
+    background: #eef2f8;
+    border-bottom-color: rgb(15 23 42 / 9%);
+  }
+
+  :global(.titlebar.light .title-menu-button) {
+    color: #4f5d72;
+  }
+
+  :global(.titlebar.light .title-menu-button:hover),
+  :global(.titlebar.light .title-menu-button.is-open) {
+    background: rgb(15 23 42 / 6%);
+    color: #111827;
+  }
+
+  :global(.titlebar.light .window-button) {
+    color: #5d6a7d;
+  }
+
+  :global(.titlebar.light .window-button:hover) {
+    background: rgb(15 23 42 / 6%);
+    color: #111827;
+  }
+
+  :global(.titlebar.light .window-close:hover) {
+    background: #c42b3a;
+    color: #fff;
+  }
+
+  :global(.app-menu-light) {
+    border-color: rgb(15 23 42 / 10%);
+    background: #ffffff;
+    box-shadow: 0 16px 48px rgb(15 23 42 / 16%);
+  }
+
+  :global(.app-menu-light .app-menu-item) {
+    color: #334155;
+  }
+
+  :global(.app-menu-light .app-menu-item:focus) {
+    background: #eef2f8;
+    color: #0f172a;
+  }
+
+  :global(.app-menu-light .app-menu-separator) {
+    background: rgb(15 23 42 / 10%);
   }
 </style>

@@ -2,8 +2,7 @@
 
 这个仓库是 **DSH 远控伴侣**，一个便携式 Windows 桌面窗口，用来显示
 [`dsh-remote-control`](https://github.com/ohmykreee/dsh-remote-control) 的远控页面，并补充麦克风选择、
-安全环境和 VR 截图能力。面向用户的说明在 [README.md](README.md)；插件侧接入任务在
-[HANDOFF.md](HANDOFF.md)。
+安全环境和 VR 截图能力。面向用户的说明在 [README.md](README.md)。
 
 ## 概览
 
@@ -36,6 +35,8 @@ src-tauri/src/
   layout.rs               子 WebView 的尺寸、位置、显示/隐藏
   remote.rs               URL、安全上下文参数、远端初始化脚本
   backdrop.rs             用 WebView2 自身截取远控画面，作为菜单模糊背景
+  window_behavior.rs      窗口透明度、全局老板键、靠边隐藏滑动
+  theme.rs                读取远控页面亮/暗主题并同步标题栏
   settings.rs             Data/settings.json
   capture.rs              OpenVR 截图、3 秒提示音
   bridge.rs               仅回环的 WebSocket 截图桥
@@ -116,11 +117,48 @@ Tauri 命令里直接调用 `Window::add_child` / `Webview::set_size` 会在某�
 - 标题栏按钮需要比 drag 层更高的 z-index。
 - 按钮使用 shadcn `Button`；图标只用 Lucide。禁止手绘功能图标。
 - 左侧只保留「应用」和（连接后）「刷新」两个平铺文字项；不要放 logo。应用图标只用于窗口/任务栏。
+- 应用菜单的顺序是置顶/取消置顶、设置、关于本软件、分隔线、退出。置顶状态通过
+  `core:window:allow-is-always-on-top` / `allow-set-always-on-top` 查询和切换，不持久化。
 - 打开菜单时远端页面会隐藏；关闭菜单要恢复。
+- 设置、关于等所有弹窗的遮罩从标题栏下方开始（`inset: var(--titlebar-height) 0 0 0`），标题栏
+  `z-index: 60` 且 `pointer-events: auto`，弹窗内容也整体下移；打开弹窗后标题栏必须保持清晰、可点击、
+  可拖动。弹窗的 `onInteractOutside` 只在事件目标位于 `.titlebar` 内时阻止关闭，不要改成全局 ignore，
+  否则点击遮罩也无法关闭。
 - 打开菜单前，通过 WebView2 自身的 `CapturePreview`（JPEG）截取远端画面，作为本地覆盖层的模糊背景；
   不要用屏幕截图或页面内 canvas。截图数据只在内存中，覆盖层关闭时丢弃；截图失败时退回纯色背景，不阻塞菜单使用。
 - 关于弹窗与加载页的 logo 直接引用 `src-tauri/icons/icon.png`，保证和 exe/任务栏图标一致；不要再用 Lucide 拼一个替代 logo。
   标题栏仍按设计不显示 logo。
+
+### 窗口透明度、老板键与靠边隐藏
+
+- 窗口透明度使用原生分层窗口（`WS_EX_LAYERED` + `SetLayeredWindowAttributes`）；WebView2 子窗口会随父窗口
+  一起透明。范围固定为 **5–100%**：低于 5% 会让窗口难以找到，后端 `sanitize` 和前端 Slider 都钳制到该范围。
+  不要改成设置 WebView 的 CSS opacity，那只影响页面，不会让整个窗口透明。
+- 老板键由官方 `tauri-plugin-global-shortcut` 注册，全局生效。`save_settings` 是 async + `spawn_blocking`，
+  不能改回同步命令：插件注册会 `run_on_main_thread` 并等待；在主线程或同步命令里调用会死锁。
+  启动时的注册放在单独线程；更换老板键时先注册新键、成功后再注销旧键，避免冲突时丢失原快捷键。
+- 靠边隐藏由 `window_behavior.rs` 中的 Win32 巡检线程完成（100ms 轮询）。收起/出现使用 14 步、
+  每步 12ms 的 ease-out cubic 滑动。窗口内侧距边缘不超过 10px、或已经越过边缘但仍与屏幕相交时算贴边；
+  鼠标离开窗口 650ms 后才收起，鼠标进入边缘 160px 的区域会恢复。鼠标左键按下时、窗口最大化或覆盖层打开时
+  不收起，避免拖动/菜单期间误触。只收起 6px 边缘（DWM 实际边框会多几像素）。禁用靠边隐藏或移除当前方向时，
+  线程会在下一轮把窗口滑回。
+- 多方向设置允许为空；空数组表示暂时不隐藏，不要自动补一个方向。设置只接受 `top`、`left`、`right`，
+  `sanitize` 会去重和过滤。
+- 靠边隐藏判定允许窗口越过边缘（例如左边缘 x=-60），只要仍与屏幕相交就算贴边；恢复时按吸附后的边缘位置
+  显示，不要把越界位置记成正常位置。窗口完全离开屏幕时不算贴边。
+- 设置 `reduce_motion` 为真时，靠边隐藏直接 `SetWindowPos`，不播放滑动；前端同时给 `<html>` 加
+  `reduce-motion` 类，全局缩短动画和过渡。不要只做其中一半。
+- 测试/调试边缘行为时，可以直接用 Win32 `MoveWindow` 把窗口贴边并 `SetCursorPos` 到窗口外；
+  不要用截图判断，读取 `GetWindowRect` 的位置即可。
+
+### 主题联动
+
+- 远控页面在 `body.dataset.theme`（`light` / `dark`）和 `<html>` 的 `light` / `dark` 类上暴露主题；
+  `meta[name="theme-color"]` 也使用 `#eef2f8` / `#151a23`。`theme.rs` 每 500ms 用 WebView2
+  `ExecuteScript` 读取一次，通过 Tauri 事件 `remote-theme` 发给 chrome，TitleBar 只切换标题栏和下拉菜单。
+- 不要轮询整页截图判断主题，也不要修改远控页面的主题。查询失败或页面加载中时保留上一次主题，避免标题栏闪烁；
+  没有远控页面时标题栏保持暗色。
+- 亮色标题栏使用 `#eef2f8`，菜单使用白底深色文字；暗色保持现有风格。标题栏之外的主界面仍按暗色设计。
 
 ### 远端权限与麦克风
 
@@ -147,7 +185,6 @@ Tauri 命令里直接调用 `Window::add_child` / `Webview::set_size` 会在某�
 - API 通过 WebSocket 连接 `127.0.0.1:<随机端口>`，token 每次启动随机，握手校验失败直接 401。
   **只监听回环地址**，不要改成 0.0.0.0。token/端点只注入给已连接的远端顶层页面。
 - 协议是二进制信封：4 字节 little-endian JSON 头长度 + JSON 头 + PNG 字节；失败时发送 JSON 文本错误。
-- 插件接入细节在 [HANDOFF.md](HANDOFF.md)，不要在 README 里展开协议。
 
 ### 覆盖层背景截图
 
@@ -211,7 +248,7 @@ Data/
 pnpm dlx shadcn-svelte@latest add <component> --overwrite --yes
 ```
 
-- 当前已使用：Button、Input、Checkbox、Switch、Select、Dialog、Progress、Separator、DropdownMenu、Sonner、Tooltip。
+- 当前已使用：Button、Input、Checkbox、Switch、Select、Slider、Dialog、Progress、Separator、DropdownMenu、Sonner、Tooltip。
 - `components.json` 的 style 使用生成器支持的 `nova`。`$lib/utils.ts` 的 `cn` 来自 `cn` 包。
 - 图标只用 `@lucide/svelte`；不要画自定义功能图标、不要 emoji。
 - 界面保持小而安静：初始窗口只有左侧连接、右侧设置；不要再加入大段装饰、状态卡堆叠或第二个主按钮。
@@ -233,15 +270,15 @@ pnpm dlx shadcn-svelte@latest add <component> --overwrite --yes
 - 新增或修改文案时同步多语言字典并重新构建对应产物。本项目当前只有简体中文，界面文案集中在
   `src/lib/copy.ts`；后端给用户看的中文错误在 `src-tauri/src/`（尤其 `capture.rs`、`remote.rs`）。
   当一个字符串同时出现在 UI 和错误路径时，两处必须保持同一措辞。
-- 修改插件（dsh-remote-control）时按插件要求同步 **侧边栏 / Host / 手机端三份字典**，见
-  [HANDOFF.md](HANDOFF.md)。
+- 修改插件（dsh-remote-control）时按插件要求同步 **侧边栏 / Host / 手机端三份字典**。
 - README 只写功能、安装摘要、使用方式、平台支持与已知限制；架构、协议、构建细节放本文件。
 
 ## 文案与界面同步
 
 - 新增设置项时同步：`src/lib/copy.ts`、`src/lib/components/SettingsPanel.svelte`、`src-tauri/src/settings.rs`
-  （字段、默认值、sanitize、持久化）以及 `HANDOFF.md` 中“是否需要插件配合”。
-- 与远端页面有关的设置项要明确“刷新后生效”还是“重连后生效”。
+  （字段、默认值、sanitize、持久化）。
+- 与远端页面有关的设置项要明确“刷新后生效”还是“重连后生效”。窗口透明度、老板键、靠边隐藏属于本地窗口行为，
+  不需要刷新远控页面。新增窗口字段时同时检查 `window_behavior::apply_*` 的启动应用路径。
 - 修改页面结构后，运行 `pnpm check` 与 `pnpm build`；修改 Rust 后运行 `cargo test` 与 `cargo check`。
 
 ## 开发调试
@@ -249,6 +286,9 @@ pnpm dlx shadcn-svelte@latest add <component> --overwrite --yes
 - 当前验收状态：
   - 已用真实 SteamVR + Beat Saber 画面验证 `TakeStereoScreenshot` 返回 PNG（约 11 MB / 2747×2746）。
   - 已用真实鼠标事件验证标题栏拖动、应用菜单、设置弹窗、窗口最大化和还原。
+  - 已验证应用菜单置顶、窗口透明度、老板键、靠边隐藏及滑动恢复。
+  - 已验证远控页面亮/暗主题切换会同步标题栏和菜单配色。
+  - 已验证开启减少动态效果后靠边隐藏不再播放滑动。
   - 已用 LAN http 地址验证安全上下文豁免（`window.isSecureContext === true`）和远端独立调试端口。
   - 已验证按 label 选择麦克风后，远端页面 `getUserMedia` 返回所选设备。
 - 本地 mock 远控页：`node test/mock-remote.mjs`，默认 `http://127.0.0.1:39001/`；页面会显示

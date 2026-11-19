@@ -62,8 +62,11 @@ class CompanionApp {
       .then(async () => {
         await api.saveSettings(snapshot);
       })
-      .catch(() => {
-        toast(copy.settings.saveFailed, 'error');
+      .catch((error: unknown) => {
+        toast(
+          typeof error === 'string' && error.trim() ? error : copy.settings.saveFailed,
+          'error',
+        );
       });
     await this.saveQueue;
   }

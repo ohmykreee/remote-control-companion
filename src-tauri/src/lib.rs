@@ -8,6 +8,8 @@ mod paths;
 mod remote;
 mod settings;
 mod state;
+mod theme;
+mod window_behavior;
 
 use std::sync::{Arc, Mutex};
 
@@ -32,14 +34,25 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_window(layout::WINDOW_LABEL) {
+                window_behavior::restore_hidden_window(&window);
                 let _ = window.unminimize();
                 let _ = window.show();
                 let _ = window.set_focus();
             }
         }))
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        window_behavior::toggle_boss_key(app);
+                    }
+                })
+                .build(),
+        )
         .invoke_handler(tauri::generate_handler![
             commands::get_bootstrap,
             commands::save_settings,
+            commands::set_window_opacity,
             commands::open_remote,
             commands::refresh_remote,
             commands::capture_remote_backdrop,
@@ -62,6 +75,8 @@ pub fn run() {
                 token: random_token(),
             };
             let loaded = settings::load();
+            let initial_opacity = loaded.window_opacity;
+            let initial_boss_key = loaded.boss_key.clone();
 
             app.manage(AppState {
                 runtime: Mutex::new(RuntimeState::new(loaded)),
@@ -86,6 +101,10 @@ pub fn run() {
             layout::create_chrome_webview(app.handle())
                 .map_err(setup_error)?;
 
+            if let Err(error) = window_behavior::apply_opacity(&window, initial_opacity) {
+                logging::warn(&format!("无法应用窗口透明度: {error}"));
+            }
+
             let handle = app.handle().clone();
             window.on_window_event(move |event| {
                 if matches!(event, WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. }) {
@@ -103,6 +122,18 @@ pub fn run() {
             });
 
             window.show()?;
+            window_behavior::start_autohide(app.handle().clone());
+            theme::start(app.handle().clone());
+            if !initial_boss_key.is_empty() {
+                let app_handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    if let Err(error) =
+                        window_behavior::apply_boss_key(&app_handle, &initial_boss_key)
+                    {
+                        logging::warn(&format!("老板键注册失败: {error}"));
+                    }
+                });
+            }
             Ok(())
         })
         .run(tauri::generate_context!())
