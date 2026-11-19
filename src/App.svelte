@@ -1,41 +1,73 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import ScanEye from '@lucide/svelte/icons/scan-eye';
   import AlertCircle from '@lucide/svelte/icons/alert-circle';
   import Loader2 from '@lucide/svelte/icons/loader-2';
+  import appIcon from '../src-tauri/icons/icon.png';
   import TitleBar from '$lib/components/TitleBar.svelte';
   import HomeView from '$lib/components/HomeView.svelte';
   import SettingsPanel from '$lib/components/SettingsPanel.svelte';
   import AboutDialog from '$lib/components/AboutDialog.svelte';
   import { Toaster } from '$lib/components/ui/sonner/index.js';
   import * as Dialog from '$lib/components/ui/dialog/index.js';
+  import { api } from '$lib/api';
   import { companion } from '$lib/state.svelte';
   import { copy } from '$lib/copy';
 
   let settingsOpen = $state(false);
   let aboutOpen = $state(false);
   let menuOpen = $state(false);
+  let remoteBackdrop = $state<string | null>(null);
+  let backdropTask: Promise<void> | null = null;
 
   onMount(() => {
     void companion.init();
   });
 
-  function ensureOverlay(): void {
-    if (companion.isRemote && !companion.overlay) {
-      void companion.ensureOverlay();
+  async function captureBackdrop(): Promise<void> {
+    if (backdropTask) return backdropTask;
+    backdropTask = (async () => {
+      try {
+        const encoded = await api.captureRemoteBackdrop();
+        if (!encoded) return;
+        const source = `data:image/jpeg;base64,${encoded}`;
+        const image = new Image();
+        const loaded = new Promise<void>((resolve) => {
+          image.onload = () => resolve();
+          image.onerror = () => resolve();
+        });
+        image.src = source;
+        await loaded;
+        remoteBackdrop = source;
+      } catch {
+        // The overlay still works with its plain dark fallback.
+      } finally {
+        backdropTask = null;
+      }
+    })();
+    return backdropTask;
+  }
+
+  async function ensureOverlay(): Promise<void> {
+    if (!companion.isRemote || companion.overlay) return;
+    await captureBackdrop();
+    if (!menuOpen && !settingsOpen && !aboutOpen) {
+      remoteBackdrop = null;
+      return;
     }
+    await companion.ensureOverlay();
   }
 
   function maybeReleaseOverlay(): void {
-    window.setTimeout(() => {
+    window.setTimeout(async () => {
       if (menuOpen || settingsOpen || aboutOpen) return;
-      void companion.releaseOverlay();
+      await companion.releaseOverlay();
+      remoteBackdrop = null;
     }, 0);
   }
 
   function handleMenuOpened(): void {
     menuOpen = true;
-    ensureOverlay();
+    void ensureOverlay();
   }
 
   function handleMenuClosed(): void {
@@ -45,12 +77,12 @@
 
   function openSettings(): void {
     settingsOpen = true;
-    ensureOverlay();
+    void ensureOverlay();
   }
 
   function openAbout(): void {
     aboutOpen = true;
-    ensureOverlay();
+    void ensureOverlay();
   }
 
   function settingsChanged(open: boolean): void {
@@ -73,7 +105,7 @@
   <div class="app-body">
     {#if !companion.ready}
       <div class="center-state">
-        <div class="loading-mark"><ScanEye class="size-6" /></div>
+        <img class="loading-mark" src={appIcon} alt="" aria-hidden="true" />
         <div class="loading-line">
           <Loader2 class="size-3.5 animate-spin" />
           <span>正在准备窗口</span>
@@ -88,7 +120,12 @@
     {:else if companion.view === 'home'}
       <HomeView />
     {:else if companion.overlay}
-      <div class="remote-backdrop"></div>
+      <div class="remote-backdrop">
+        {#if remoteBackdrop}
+          <img class="backdrop-image" src={remoteBackdrop} alt="" aria-hidden="true" />
+        {/if}
+        <div class="backdrop-veil"></div>
+      </div>
     {/if}
   </div>
 
@@ -137,13 +174,10 @@
   }
 
   .loading-mark {
-    display: grid;
-    place-items: center;
     width: 54px;
     height: 54px;
     border-radius: 16px;
-    color: #eef2ff;
-    background: linear-gradient(145deg, #5878ff, #2949ca);
+    object-fit: cover;
     box-shadow: 0 16px 42px rgb(31 59 191 / 28%);
   }
 
@@ -183,11 +217,33 @@
   }
 
   .remote-backdrop {
+    position: relative;
     flex: 1;
     min-height: 0;
+    overflow: hidden;
     background:
       radial-gradient(900px 560px at 30% 0%, rgb(50 76 190 / 8%), transparent 65%),
       #0b0f16;
+  }
+
+  .backdrop-image {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    filter: blur(18px) brightness(0.78) contrast(1.04) saturate(0.92);
+    transform: scale(1.08);
+    transform-origin: center;
+    opacity: 0.96;
+  }
+
+  .backdrop-veil {
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(80% 80% at 50% 20%, transparent 0%, rgb(6 9 14 / 10%) 75%),
+      linear-gradient(180deg, rgb(6 9 14 / 8%), rgb(6 9 14 / 30%));
   }
 
   :global(.settings-dialog) {

@@ -1,3 +1,4 @@
+mod backdrop;
 mod bridge;
 mod capture;
 mod commands;
@@ -41,6 +42,7 @@ pub fn run() {
             commands::save_settings,
             commands::open_remote,
             commands::refresh_remote,
+            commands::capture_remote_backdrop,
             commands::set_chrome_overlay,
             commands::quit_app,
         ])

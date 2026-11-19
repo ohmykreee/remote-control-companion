@@ -48,6 +48,7 @@ export const api = {
   openRemote: (address: string, remember: boolean) =>
     invoke<LayoutState>('open_remote', { address, remember }),
   refreshRemote: () => invoke<LayoutState>('refresh_remote'),
+  captureRemoteBackdrop: () => invoke<string | null>('capture_remote_backdrop'),
   setOverlay: (active: boolean) => invoke<LayoutState>('set_chrome_overlay', { active }),
   quitApp: () => invoke<void>('quit_app'),
 };

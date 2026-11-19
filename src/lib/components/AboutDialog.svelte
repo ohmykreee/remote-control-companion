@@ -2,11 +2,11 @@
   import Info from '@lucide/svelte/icons/info';
   import Database from '@lucide/svelte/icons/database';
   import Monitor from '@lucide/svelte/icons/monitor';
-  import ScanEye from '@lucide/svelte/icons/scan-eye';
   import * as Dialog from '$lib/components/ui/dialog/index.js';
   import { Button } from '$lib/components/ui/button/index.js';
   import { companion } from '$lib/state.svelte';
   import { copy } from '$lib/copy';
+  import appIcon from '../../../src-tauri/icons/icon.png';
 
   let {
     open = $bindable(false),
@@ -18,10 +18,10 @@
 </script>
 
 <Dialog.Root bind:open {onOpenChange}>
-  <Dialog.Content class="about-dialog max-w-[520px] gap-0 p-0">
+  <Dialog.Content class="about-dialog w-[calc(100vw-3rem)] max-w-[560px] gap-0 p-0 sm:max-w-[520px]">
     <div class="about-head">
       <div class="about-glow"></div>
-      <div class="about-mark"><ScanEye class="size-6" /></div>
+      <img class="about-mark" src={appIcon} alt="" aria-hidden="true" />
       <div class="about-title-row">
         <div>
           <Dialog.Title class="about-title">{copy.about.title}</Dialog.Title>
@@ -54,7 +54,7 @@
       </div>
     </div>
 
-    <Dialog.Footer class="about-footer">
+    <Dialog.Footer class="about-footer mx-0 mb-0 rounded-none border-t bg-transparent">
       <Button class="dismiss-button" onclick={() => (open = false)}>{copy.about.close}</Button>
     </Dialog.Footer>
   </Dialog.Content>
@@ -66,6 +66,7 @@
     background: #121822;
     box-shadow: 0 36px 110px rgb(0 0 0 / 58%);
     border-radius: 16px;
+    overflow: hidden;
   }
 
   .about-head {
@@ -91,16 +92,11 @@
 
   .about-mark {
     position: relative;
-    display: grid;
-    place-items: center;
+    display: block;
     width: 46px;
     height: 46px;
     border-radius: 13px;
-    color: #e8eeff;
-    background:
-      radial-gradient(100% 100% at 26% 8%, rgb(255 255 255 / 22%), transparent 48%),
-      linear-gradient(145deg, #5d7cff, #2d4ed2);
-    border: 1px solid rgb(255 255 255 / 16%);
+    object-fit: cover;
     box-shadow: 0 9px 28px rgb(38 68 210 / 27%);
     margin-bottom: 17px;
   }

@@ -1,6 +1,9 @@
+use base64::Engine;
 use serde::Serialize;
+use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
+use crate::backdrop;
 use crate::layout;
 use crate::logging;
 use crate::remote;
@@ -164,6 +167,38 @@ fn refresh_remote_blocking(app: AppHandle) -> Result<LayoutState, String> {
         logging::redact_url(url.as_str())
     ));
     Ok(layout_state(&runtime))
+}
+
+#[tauri::command]
+pub async fn capture_remote_backdrop(app: AppHandle) -> Result<Option<String>, String> {
+    let label = {
+        let state = app.state::<AppState>();
+        let runtime = lock(&state);
+        if runtime.remote_url.is_none() || runtime.overlay {
+            return Ok(None);
+        }
+        runtime.remote_label.clone()
+    };
+    let label = label.ok_or_else(|| "远控页面还没有准备好。".to_string())?;
+    let webview = app
+        .get_webview(&label)
+        .ok_or_else(|| "远控页面没有准备好，请刷新后重试。".to_string())?;
+
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    webview
+        .with_webview(move |platform| backdrop::capture_preview(platform, sender))
+        .map_err(|error| format!("无法截取远控画面（{error}）。"))?;
+
+    let result = tokio::time::timeout(Duration::from_secs(2), receiver)
+        .await
+        .map_err(|_| "截取远控画面超时。".to_string())?
+        .map_err(|_| "截取远控画面被中断。".to_string())??;
+    if result.is_empty() {
+        return Err("远控画面为空，已使用纯色背景。".to_string());
+    }
+    Ok(Some(
+        base64::engine::general_purpose::STANDARD.encode(result),
+    ))
 }
 
 #[tauri::command]

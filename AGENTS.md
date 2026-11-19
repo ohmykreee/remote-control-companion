@@ -35,6 +35,7 @@ src-tauri/src/
   commands.rs             IPC 命令；会操作 WebView 的命令必须避开主线程死锁
   layout.rs               子 WebView 的尺寸、位置、显示/隐藏
   remote.rs               URL、安全上下文参数、远端初始化脚本
+  backdrop.rs             用 WebView2 自身截取远控画面，作为菜单模糊背景
   settings.rs             Data/settings.json
   capture.rs              OpenVR 截图、3 秒提示音
   bridge.rs               仅回环的 WebSocket 截图桥
@@ -116,6 +117,10 @@ Tauri 命令里直接调用 `Window::add_child` / `Webview::set_size` 会在某�
 - 按钮使用 shadcn `Button`；图标只用 Lucide。禁止手绘功能图标。
 - 左侧只保留「应用」和（连接后）「刷新」两个平铺文字项；不要放 logo。应用图标只用于窗口/任务栏。
 - 打开菜单时远端页面会隐藏；关闭菜单要恢复。
+- 打开菜单前，通过 WebView2 自身的 `CapturePreview`（JPEG）截取远端画面，作为本地覆盖层的模糊背景；
+  不要用屏幕截图或页面内 canvas。截图数据只在内存中，覆盖层关闭时丢弃；截图失败时退回纯色背景，不阻塞菜单使用。
+- 关于弹窗与加载页的 logo 直接引用 `src-tauri/icons/icon.png`，保证和 exe/任务栏图标一致；不要再用 Lucide 拼一个替代 logo。
+  标题栏仍按设计不显示 logo。
 
 ### 远端权限与麦克风
 
@@ -143,6 +148,15 @@ Tauri 命令里直接调用 `Window::add_child` / `Webview::set_size` 会在某�
   **只监听回环地址**，不要改成 0.0.0.0。token/端点只注入给已连接的远端顶层页面。
 - 协议是二进制信封：4 字节 little-endian JSON 头长度 + JSON 头 + PNG 字节；失败时发送 JSON 文本错误。
 - 插件接入细节在 [HANDOFF.md](HANDOFF.md)，不要在 README 里展开协议。
+
+### 覆盖层背景截图
+
+- `capture_remote_backdrop` 与 VR 截图 API 是两套东西：前者只用于菜单/设置的背景伪装，后者给插件使用。
+- 通过 `Webview::with_webview` 取得 WebView2 controller，调用 `ICoreWebView2::CapturePreview` 输出 JPEG；
+  不要用 GDI 屏幕截图，避免遮挡、DPI 和窗口捕获问题。
+- 捕获发生在 `set_chrome_overlay` 之前，否则远端 WebView 已被隐藏。`backdropTask` 需要合并并发调用。
+- 图像以 data URL 放在本地 chrome，带 CSS blur；不写磁盘，不进入桥，不暴露给远端页面。
+- 失败路径必须静默降级到纯色背景，菜单仍然可用；不要把错误弹给终端用户。
 
 ### VR 截图
 
