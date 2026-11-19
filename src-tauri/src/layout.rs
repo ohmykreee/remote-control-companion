@@ -173,6 +173,7 @@ pub fn create_or_replace_remote(
 
     // Ensure the new webview is not painted underneath a full-size chrome
     // viewport after a reload triggered from settings.
+    crate::motion::apply_to_webview(&new_webview, settings.reduce_motion);
     drop(new_webview);
     sync(app, runtime)?;
     Ok(())

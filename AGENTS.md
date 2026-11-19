@@ -35,6 +35,7 @@ src-tauri/src/
   layout.rs               子 WebView 的尺寸、位置、显示/隐藏
   remote.rs               URL、安全上下文参数、远端初始化脚本
   backdrop.rs             用 WebView2 自身截取远控画面，作为菜单模糊背景
+  motion.rs               把减少动态效果同步给远控页面的 prefers-reduced-motion
   window_behavior.rs      窗口透明度、全局老板键、靠边隐藏滑动
   theme.rs                读取远控页面亮/暗主题并同步标题栏
   settings.rs             Data/settings.json
@@ -148,6 +149,10 @@ Tauri 命令里直接调用 `Window::add_child` / `Webview::set_size` 会在某�
   显示，不要把越界位置记成正常位置。窗口完全离开屏幕时不算贴边。
 - 设置 `reduce_motion` 为真时，靠边隐藏直接 `SetWindowPos`，不播放滑动；前端同时给 `<html>` 加
   `reduce-motion` 类，全局缩短动画和过渡。不要只做其中一半。
+- 远端页面通过 Chromium 的 `Emulation.setEmulatedMedia` 收到同一个设置：`motion.rs` 在新建/刷新远控
+  WebView 时，以及设置变化时，把 `prefers-reduced-motion` 设为 `reduce`；关闭时发空 `features` 清除覆盖，
+  让页面重新跟随系统。远端页面自己的 `matchMedia` 监听会因此切换，切页等动画必须同步关闭。
+  不要只改本地类名而没有通知远端 WebView。
 - 测试/调试边缘行为时，可以直接用 Win32 `MoveWindow` 把窗口贴边并 `SetCursorPos` 到窗口外；
   不要用截图判断，读取 `GetWindowRect` 的位置即可。
 
@@ -289,6 +294,7 @@ pnpm dlx shadcn-svelte@latest add <component> --overwrite --yes
   - 已验证应用菜单置顶、窗口透明度、老板键、靠边隐藏及滑动恢复。
   - 已验证远控页面亮/暗主题切换会同步标题栏和菜单配色。
   - 已验证开启减少动态效果后靠边隐藏不再播放滑动。
+  - 已验证减少动态效果通过 CDP 同步到远控页面，`matchMedia` 收到 change 事件。
   - 已用 LAN http 地址验证安全上下文豁免（`window.isSecureContext === true`）和远端独立调试端口。
   - 已验证按 label 选择麦克风后，远端页面 `getUserMedia` 返回所选设备。
 - 本地 mock 远控页：`node test/mock-remote.mjs`，默认 `http://127.0.0.1:39001/`；页面会显示

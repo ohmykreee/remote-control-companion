@@ -6,6 +6,7 @@ use tauri::{AppHandle, Manager};
 use crate::backdrop;
 use crate::layout;
 use crate::logging;
+use crate::motion;
 use crate::remote;
 use crate::settings::{self, Settings};
 use crate::state::{AppState, RuntimeState};
@@ -102,18 +103,21 @@ fn save_settings_blocking(app: AppHandle, settings: Settings) -> Result<Settings
     next.sanitize();
     settings::save(&next)?;
     let state = app.state::<AppState>();
-    let previous_key = {
+    let previous = {
         let mut runtime = lock(&state);
-        let previous_key = runtime.settings.boss_key.clone();
+        let previous = runtime.settings.clone();
         runtime.settings = next.clone();
-        previous_key
+        previous
     };
 
     if let Some(window) = app.get_window(layout::WINDOW_LABEL) {
         window_behavior::apply_opacity(&window, next.window_opacity)?;
     }
-    if previous_key != next.boss_key {
-        window_behavior::change_boss_key(&app, &previous_key, &next.boss_key)?;
+    if previous.boss_key != next.boss_key {
+        window_behavior::change_boss_key(&app, &previous.boss_key, &next.boss_key)?;
+    }
+    if previous.reduce_motion != next.reduce_motion {
+        motion::apply_to_current_remote(&app, next.reduce_motion);
     }
     if !next.edge_autohide {
         if let Some(window) = app.get_window(layout::WINDOW_LABEL) {

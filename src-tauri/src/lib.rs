@@ -4,6 +4,7 @@ mod capture;
 mod commands;
 mod layout;
 mod logging;
+mod motion;
 mod paths;
 mod remote;
 mod settings;

@@ -88,7 +88,7 @@ export const copy = {
       edgeLeft: '左',
       edgeRight: '右',
       reduceMotion: '减少动态效果',
-      reduceMotionHint: '关闭窗口滑动和界面过渡动画。',
+      reduceMotionHint: '关闭窗口滑动、界面过渡和远控页面的切页动画。',
       edgeNote: '窗口最大化时不会靠边隐藏。',
     },
     autoSaved: '设置已保存',
