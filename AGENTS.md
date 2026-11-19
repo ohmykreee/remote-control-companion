@@ -173,8 +173,13 @@ Tauri 命令里直接调用 `Window::add_child` / `Webview::set_size` 会在某�
 - 截图路径必须是普通绝对路径。**建议不要 `fs::canonicalize`**：Windows 会加 `\\?\` 前缀，
   SteamVR 的 C 文件写入不保证接受这种路径；当前直接使用 `Data/Cache/VRScreenshots` 的绝对路径。
   路径中包含非 ASCII 时也要留意。
-- 延迟 3 秒时：每秒播放一声提示音（默认音频设备），共三声，然后截图。当前用内存 WAV +
-  `PlaySoundW(SND_MEMORY | SND_ASYNC)`，不依赖 MIDI 设备。不要在截图线程里等待文件之外的其他异步。
+- 延迟 3 秒时：播放内嵌的 `src-tauri/assets/capture-countdown.wav`（前 3 秒每秒一声提示音，第 3 秒
+  是相机快门），等待 3 秒后截图。快门取自 CC0 的 "DSLR Shutter fast 006.wav"（见
+  THIRD_PARTY_NOTICES），与三声提示音预先混合。声音使用 `PlaySoundW(SND_MEMORY | SND_ASYNC)`，不依赖
+  MIDI 设备。这是临时音效，不要添加持久的声音生成脚本；需要调整时直接替换 WAV，并保留可试听文件。
+- 截图在返回插件前会被裁剪：SteamVR 的 preview 是近方形纹理，下方有未渲染区域；当前取顶部
+  `57.2%` 高度（依据用户红线参考），仅对近方形图生效。裁剪在 `crop_preview` 中完成，失败时退回原图。
+  不要把这个裁剪交给插件页面。
 - 截图接口可用性冒烟测试：`capture_openvr_smoke`。该测试需要头显里有活动 VR 画面；没有画面时会超时，
   这是运行时依赖，不是单元测试失败。
 - 截图结束必须调用 `VR_ShutdownInternal`；同一时间只允许一个截图任务（`capture_lock`）。

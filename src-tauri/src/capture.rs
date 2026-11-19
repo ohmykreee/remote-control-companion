@@ -1,5 +1,6 @@
 use std::ffi::CString;
 use std::fs;
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -9,6 +10,12 @@ const VR_APPLICATION_OVERLAY: i32 = 2;
 const VR_INIT_ERROR_NONE: i32 = 0;
 const SCREENSHOT_INTERFACE: &str = "FnTable:IVRScreenshots_001";
 const SCREENSHOT_TIMEOUT: Duration = Duration::from_secs(10);
+const COUNTDOWN_SOUND: &[u8] = include_bytes!("../assets/capture-countdown.wav");
+
+/// The SteamVR preview is a near-square eye texture with a large unrendered
+/// area below the real view. Keep only the top portion, estimated from the
+/// red-line reference at 57.2% of the image height.
+const VR_PREVIEW_TOP_RATIO: f64 = 0.572;
 
 /// Blocks for the screenshot operation. Called from a blocking worker on the
 /// bridge, never directly from Tauri's async runtime.
@@ -32,25 +39,38 @@ fn three_second_countdown() {
     {
         use windows_sys::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
 
-        let wav = platform::beep_wav();
-        for _ in 0..3 {
-            unsafe {
-                let _ = PlaySoundW(
-                    wav.as_ptr() as *const u16,
-                    std::ptr::null_mut(),
-                    SND_MEMORY | SND_ASYNC | SND_NODEFAULT,
-                );
-            }
-            std::thread::sleep(Duration::from_secs(1));
+        // The embedded clip contains three countdown beeps at one-second
+        // intervals and the shutter click at the 3.0s mark.
+        unsafe {
+            let _ = PlaySoundW(
+                COUNTDOWN_SOUND.as_ptr() as *const u16,
+                std::ptr::null_mut(),
+                SND_MEMORY | SND_ASYNC | SND_NODEFAULT,
+            );
         }
-        // Keep the sound buffer alive for the asynchronous player until the
-        // screenshot begins.
-        drop(wav);
+        std::thread::sleep(Duration::from_secs(3));
         return;
     }
 
     #[cfg(not(windows))]
     std::thread::sleep(Duration::from_secs(3));
+}
+
+fn crop_preview(png_bytes: &[u8]) -> Result<Vec<u8>, String> {
+    let image = image::load_from_memory_with_format(png_bytes, image::ImageFormat::Png)
+        .map_err(|error| format!("无法读取 VR 截图（{error}）。"))?;
+    let (width, height) = (image.width(), image.height());
+    if width == 0 || height == 0 || (height as f64) <= (width as f64) * 0.75 {
+        return Ok(png_bytes.to_vec());
+    }
+
+    let crop_height = (((height as f64) * VR_PREVIEW_TOP_RATIO).round() as u32).clamp(1, height);
+    let cropped = image.crop_imm(0, 0, width, crop_height);
+    let mut encoded = Cursor::new(Vec::new());
+    cropped
+        .write_to(&mut encoded, image::ImageFormat::Png)
+        .map_err(|error| format!("无法裁剪 VR 截图（{error}）。"))?;
+    Ok(encoded.into_inner())
 }
 
 #[cfg(windows)]
@@ -91,43 +111,6 @@ mod platform {
     }
 
     const _: () = assert!(std::mem::size_of::<ScreenshotFnTable>() == 7 * 8);
-
-    pub fn beep_wav() -> Vec<u8> {
-        const SAMPLE_RATE: u32 = 44_100;
-        const DURATION_MS: u32 = 120;
-        const FREQUENCY: f64 = 1046.5;
-        let sample_count = (SAMPLE_RATE as f64 * DURATION_MS as f64 / 1000.0) as u32;
-        let data_size = sample_count * 2;
-        let mut wav = Vec::with_capacity((44 + data_size) as usize);
-
-        wav.extend_from_slice(b"RIFF");
-        wav.extend_from_slice(&(36 + data_size).to_le_bytes());
-        wav.extend_from_slice(b"WAVEfmt ");
-        wav.extend_from_slice(&16u32.to_le_bytes());
-        wav.extend_from_slice(&1u16.to_le_bytes());
-        wav.extend_from_slice(&1u16.to_le_bytes());
-        wav.extend_from_slice(&SAMPLE_RATE.to_le_bytes());
-        wav.extend_from_slice(&(SAMPLE_RATE * 2).to_le_bytes());
-        wav.extend_from_slice(&2u16.to_le_bytes());
-        wav.extend_from_slice(&16u16.to_le_bytes());
-        wav.extend_from_slice(b"data");
-        wav.extend_from_slice(&data_size.to_le_bytes());
-
-        for index in 0..sample_count {
-            let t = index as f64 / SAMPLE_RATE as f64;
-            let envelope = {
-                let progress = index as f64 / sample_count as f64;
-                let attack = (progress / 0.06).min(1.0);
-                let release = ((1.0 - progress) / 0.28).min(1.0);
-                attack.min(release)
-            };
-            let sample = (t * FREQUENCY * std::f64::consts::TAU).sin()
-                * 0.28
-                * envelope;
-            wav.extend_from_slice(&((sample * i16::MAX as f64) as i16).to_le_bytes());
-        }
-        wav
-    }
 
     fn library_candidates() -> Vec<PathBuf> {
         let mut candidates = Vec::new();
@@ -330,9 +313,25 @@ mod platform {
                         ));
                         "等待 VR 截图超时。请先在头显中打开任意 VR 应用，再试一次。".to_string()
                     })?;
-                    fs::read(&preview_file).map_err(|error| {
+                    let full = fs::read(&preview_file).map_err(|error| {
                         format!("无法读取截图结果，请重试（{error}）。")
-                    })
+                    })?;
+                    match crop_preview(&full) {
+                        Ok(cropped) => {
+                            crate::logging::info(&format!(
+                                "VR 截图已裁剪: {} -> {} bytes",
+                                full.len(),
+                                cropped.len()
+                            ));
+                            Ok(cropped)
+                        }
+                        Err(error) => {
+                            crate::logging::warn(&format!(
+                                "VR 截图裁剪失败，返回原始截图: {error}"
+                            ));
+                            Ok(full)
+                        }
+                    }
                 })();
 
                 shutdown();
@@ -361,6 +360,29 @@ mod platform {
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
+    use image::{ImageFormat, Rgba, RgbaImage};
+
+    #[test]
+    fn crop_preview_keeps_the_top_portion_of_a_near_square_image() {
+        let source = RgbaImage::from_pixel(100, 100, Rgba([12, 34, 56, 255]));
+        let mut png = Cursor::new(Vec::new());
+        source.write_to(&mut png, ImageFormat::Png).unwrap();
+
+        let cropped = crop_preview(&png.into_inner()).expect("crop");
+        let decoded = image::load_from_memory_with_format(&cropped, ImageFormat::Png).unwrap();
+        assert_eq!(decoded.width(), 100);
+        assert_eq!(decoded.height(), 57);
+    }
+
+    #[test]
+    fn crop_preview_leaves_wide_images_untouched() {
+        let source = RgbaImage::from_pixel(160, 90, Rgba([1, 2, 3, 255]));
+        let mut png = Cursor::new(Vec::new());
+        source.write_to(&mut png, ImageFormat::Png).unwrap();
+        let original = png.into_inner();
+        let cropped = crop_preview(&original).expect("crop");
+        assert_eq!(cropped, original);
+    }
 
     #[test]
     #[ignore = "requires a running SteamVR session and an awake headset"]

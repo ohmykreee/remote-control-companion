@@ -56,7 +56,7 @@ export const copy = {
       replace: '替换剪切板为 VR 截图',
       replaceHint: '远控页面检测到本软件后，会优先使用这里的截图。',
       delay: '延迟 3 秒后截图',
-      delayHint: '等待三秒，每一秒响一声，然后截取 VR 画面。',
+      delayHint: '等待三秒，每秒响一声；最后一声咔嚓后截图。',
       note: '需要 SteamVR 正在运行。修改后重新载入远控页面生效。',
     },
     security: {

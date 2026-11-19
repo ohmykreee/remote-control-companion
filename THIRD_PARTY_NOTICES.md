@@ -16,3 +16,9 @@ of the OpenVR SDK by Valve Corporation. It is distributed under the BSD
 - Sonner / svelte-sonner: MIT
 - OpenVR API bindings used by this project are loaded through the official
   `openvr_api.dll` at runtime; no SDK source is redistributed.
+
+## Sound
+
+The camera-shutter sound in `capture-countdown.wav` is
+"DSLR Shutter fast 006.wav" by ristooooo1, via Freesound
+(<https://freesound.org/s/539136/>), released under CC0 1.0.
