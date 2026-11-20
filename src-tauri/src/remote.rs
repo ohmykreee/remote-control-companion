@@ -27,6 +27,55 @@ pub fn normalize_remote_url(raw: &str) -> Result<tauri::Url, String> {
     Ok(url)
 }
 
+/// True for a plain-HTTP URL whose host is a private/loopback IP address.
+/// Hostnames are intentionally not resolved here: DNS could change between
+/// this check and the actual request.
+pub fn is_private_http_url(url: &tauri::Url) -> bool {
+    if url.scheme() != "http" {
+        return false;
+    }
+    match url.host() {
+        Some(url::Host::Ipv4(address)) => {
+            address.is_private()
+                || address.is_loopback()
+                || address.is_link_local()
+                || is_shared_ipv4(address)
+        }
+        Some(url::Host::Ipv6(address)) => {
+            address.is_loopback() || address.is_unique_local() || address.is_unicast_link_local()
+        }
+        _ => false,
+    }
+}
+
+fn is_shared_ipv4(address: std::net::Ipv4Addr) -> bool {
+    let octets = address.octets();
+    octets[0] == 100 && (64..128).contains(&octets[1])
+}
+
+#[cfg(target_os = "linux")]
+pub fn linux_page_url(
+    url: &tauri::Url,
+    settings: &Settings,
+) -> Result<(tauri::Url, Option<crate::loopback_proxy::LoopbackProxy>), String> {
+    if !settings.force_secure_context || url.scheme() != "http" {
+        return Ok((url.clone(), None));
+    }
+    let host = url
+        .host_str()
+        .ok_or_else(|| "远控地址缺少主机名。".to_string())?;
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| "远控地址缺少端口。".to_string())?;
+    let proxy = crate::loopback_proxy::LoopbackProxy::start(host, port)?;
+    let mut page = url.clone();
+    page.set_host(Some("127.0.0.1"))
+        .map_err(|_| "无法创建本地安全上下文地址。".to_string())?;
+    page.set_port(Some(proxy.port()))
+        .map_err(|_| "无法创建本地安全上下文端口。".to_string())?;
+    Ok((page, Some(proxy)))
+}
+
 /// The WebView2 command line for the remote page. A separate browser profile is
 /// used for every argument set because WebView2 requires that when browser
 /// arguments differ.
@@ -113,6 +162,30 @@ mod tests {
     #[test]
     fn rejects_non_web_schemes() {
         assert!(normalize_remote_url("file:///C:/secret.txt").is_err());
+    }
+
+    #[test]
+    fn private_http_address_detection() {
+        for address in [
+            "http://10.1.2.3:38765/",
+            "http://172.16.3.119:38765/",
+            "http://192.168.1.20/",
+            "http://127.0.0.1:38765/",
+            "http://100.64.0.1/",
+            "http://[::1]:38765/",
+            "http://[fd00::1]/",
+        ] {
+            assert!(is_private_http_url(&normalize_remote_url(address).unwrap()));
+        }
+        for address in [
+            "https://172.16.3.119:38765/",
+            "http://8.8.8.8/",
+            "http://example.com/",
+        ] {
+            assert!(!is_private_http_url(
+                &normalize_remote_url(address).unwrap()
+            ));
+        }
     }
 
     #[test]

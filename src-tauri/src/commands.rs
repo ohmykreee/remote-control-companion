@@ -26,6 +26,7 @@ pub struct LayoutState {
     pub overlay: bool,
     pub address: String,
     pub secure_context_applied: bool,
+    pub force_secure_context: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -73,6 +74,7 @@ fn layout_state(runtime: &RuntimeState) -> LayoutState {
         overlay: runtime.overlay,
         address,
         secure_context_applied: runtime.secure_context_applied,
+        force_secure_context: runtime.settings.force_secure_context,
     }
 }
 
@@ -162,6 +164,10 @@ fn go_home_blocking(app: AppHandle) -> Result<LayoutState, String> {
     }
     runtime.remote_url = None;
     runtime.secure_context_applied = false;
+    #[cfg(target_os = "linux")]
+    {
+        runtime.secure_proxy = None;
+    }
     runtime.overlay = false;
     layout::sync(&app, &runtime)?;
     Ok(layout_state(&runtime))
@@ -195,6 +201,13 @@ fn open_remote_blocking(
     } else {
         String::new()
     };
+    if next_settings.auto_secure_context
+        && remote::is_private_http_url(&url)
+        && !next_settings.force_secure_context
+    {
+        next_settings.force_secure_context = true;
+        logging::info("检测到内网 HTTP 地址，已自动开启强制安全上下文");
+    }
     next_settings.sanitize();
     settings::save(&next_settings)?;
 

@@ -11,6 +11,7 @@ export interface Settings {
   replace_clipboard_with_vr: boolean;
   delay_vr_capture: boolean;
   force_secure_context: boolean;
+  auto_secure_context: boolean;
   window_opacity: number;
   boss_key: string;
   edge_autohide: boolean;
@@ -31,6 +32,7 @@ export interface LayoutState {
   overlay: boolean;
   address: string;
   secure_context_applied: boolean;
+  force_secure_context: boolean;
 }
 
 export interface Bootstrap {
@@ -49,6 +51,7 @@ export const DEFAULT_SETTINGS: Settings = {
   replace_clipboard_with_vr: false,
   delay_vr_capture: false,
   force_secure_context: false,
+  auto_secure_context: true,
   window_opacity: 100,
   boss_key: '',
   edge_autohide: false,

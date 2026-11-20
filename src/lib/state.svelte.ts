@@ -153,6 +153,7 @@ class CompanionApp {
     this.view = layout.mode;
     this.overlay = layout.overlay;
     this.secureContextApplied = layout.secure_context_applied;
+    this.settings.force_secure_context = layout.force_secure_context;
     if (layout.address) this.address = layout.address;
   }
 

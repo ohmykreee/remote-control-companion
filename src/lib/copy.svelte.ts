@@ -83,6 +83,8 @@ const zh = {
       force: '强制开启安全上下文',
       forceHint:
         '为输入的 http 地址启用安全环境，允许麦克风、语音输入和剪贴板读取。重新载入后生效。',
+      auto: '自动开启安全上下文',
+      autoHint: '输入内网 HTTP 地址时，自动开启上方选项并保存到设置。',
       note: '仅对当前输入的远控地址生效。使用 https 时无需开启。',
     },
     window: {
@@ -216,6 +218,9 @@ const en: CopySchema = {
       force: 'Force secure context',
       forceHint:
         'Enable a secure context for the entered http address so microphone, voice input, and clipboard reads work. Reload to apply.',
+      auto: 'Automatically enable secure context',
+      autoHint:
+        'For a private-network HTTP address, turn on the option above and save it to settings.',
       note: 'Applies only to the current remote address. Not needed for https.',
     },
     window: {

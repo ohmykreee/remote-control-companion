@@ -36,6 +36,10 @@
     void companion.save({ force_secure_context: checked });
   }
 
+  function setAutoSecureContext(checked: boolean): void {
+    void companion.save({ auto_secure_context: checked });
+  }
+
   function clampOpacity(value: number): number {
     return Math.min(100, Math.max(5, Math.round(value)));
   }
@@ -291,6 +295,18 @@
         checked={companion.settings.force_secure_context}
         onCheckedChange={setSecureContext}
         aria-label={copy.settings.security.force}
+      />
+    </div>
+
+    <div class="toggle-row">
+      <div class="toggle-copy">
+        <span class="toggle-title">{copy.settings.security.auto}</span>
+        <span class="toggle-hint">{copy.settings.security.autoHint}</span>
+      </div>
+      <Switch
+        checked={companion.settings.auto_secure_context}
+        onCheckedChange={setAutoSecureContext}
+        aria-label={copy.settings.security.auto}
       />
     </div>
 

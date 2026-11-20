@@ -354,6 +354,18 @@ LICENSE、THIRD_PARTY_NOTICES。
 - `linux_webview.rs` 在窗口里创建原生 GTK 顶栏：44px 应用栏（标题和窗口按钮）+ 38px 工具栏
   （设置 / 返回 / 刷新 / 关于 / 语言）。Linux 的连接页、远控页和设置页都使用这套顶栏；本地 chrome
   WebView 在远控时隐藏，远控 WebView 在工具栏下方占满剩余窗口；打开设置/关于时显示全窗口本地 chrome。
+- 应用栏必须用 `GtkEventBox` 接收空白区/标题的按钮事件，拖动调用
+  `gtk::Window::begin_move_drag(button, root_x, root_y, time)`。Tauri 的 `start_dragging` 在 Wayland
+  不能开始移动；不要退回它，也不要把拖动处理只挂在 `GtkBox` 或标题 `GtkLabel` 上。
+- 内网 HTTP 的 Linux 安全上下文由 `loopback_proxy.rs` 提供：把远控页加载为
+  `http://127.0.0.1:<随机端口>/...`，原始 HTTP/WebSocket 字节转发到真实服务器。localhost 是 WebKitGTK
+  的安全上下文；`remote_bootstrap.js` 的 origin 必须用这个本地页面地址，而 `RuntimeState.remote_url`
+  仍保存用户输入的原始地址。代理只监听回环地址，`go_home`/刷新时释放。
+- Linux 远端 WebView 必须连接 WebKitGTK 的 `permission-request`，对
+  `UserMediaPermissionRequest` 调用 `allow()`；只设置 Tauri 的 `on_permission_request` 不够。
+- `force_secure_context` 默认关闭；`auto_secure_context` 默认开启。连接内网 HTTP 地址时，只有自动开关
+  开启才会把 `force_secure_context` 设为 true、立即保存，并通过 `LayoutState.force_secure_context`
+  同步到前端。`is_private_http_url` 只判断 IP 字面量，不解析主机名。
 - 不要在 Linux 上尝试用 `set_position` / `set_size` 摆第二个 WebView；上游 Tauri 会忽略这些 bounds。
   也不要把它重新塞进 `GtkFixed` 或 reparent WebKit 控件，这会在 GTK/Wayland 下崩溃。
 - 原生栏按钮通过 `linux-open-settings`、`linux-back-home`、`linux-refresh` 事件驱动前端，语言由
@@ -365,7 +377,8 @@ LICENSE、THIRD_PARTY_NOTICES。
 - Linux VR 截图使用 OpenVR 的 `libopenvr_api.so`：程序目录、`$HOME` 下的 SteamVR 安装和
   `openvrpaths.vrpath` 都会被搜索；`DSH_COMPANION_OPENVR_PATH` 可指定测试库。
   `DSH_COMPANION_VR_MOCK=1` 返回确定性预览，只用于无头测试，不应作为生产截图。
-- 安全上下文豁免仅 Windows 有效；Linux 请用 `https://`。覆盖层背景截图在 Linux 暂时降级为纯色背景。
+- 安全上下文豁免在 Windows 使用 Chromium 启动参数；Linux 使用回环转发获得 localhost 安全上下文。
+  覆盖层背景截图在 Linux 暂时降级为纯色背景。
 - 窗口靠边隐藏使用 Tauri 的鼠标/窗口 API；KDE/GNOME Wayland 可能拒绝移动窗口，X11 会话可完整工作。
   全局老板键由 `tauri-plugin-global-shortcut` 提供，Wayland 下可能不可用。
 

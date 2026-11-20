@@ -13,6 +13,7 @@
 
 use gtk::prelude::*;
 use tauri::{AppHandle, Emitter, Manager, Webview, Window};
+use webkit2gtk::{PermissionRequestExt, SettingsExt, UserMediaPermissionRequest, WebViewExt};
 
 const APP_BAR: &str = "dsh-linux-appbar";
 const TOOLBAR: &str = "dsh-linux-toolbar";
@@ -65,6 +66,10 @@ pub fn prepare(window: &Window, app: AppHandle) {
     let topbar = gtk::Box::new(gtk::Orientation::Vertical, 0);
     topbar.set_widget_name(TOPBAR);
 
+    let appbar_wrap = gtk::EventBox::new();
+    appbar_wrap.set_visible_window(false);
+    appbar_wrap.set_above_child(false);
+
     let appbar = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     appbar.set_widget_name(APP_BAR);
     let title = gtk::Label::new(Some("DSH 远控伴侣"));
@@ -104,11 +109,21 @@ pub fn prepare(window: &Window, app: AppHandle) {
         let _ = window_for_close.close();
     });
     appbar.pack_start(&close, false, false, 0);
+    appbar_wrap.add(&appbar);
 
-    let window_for_drag = window.clone();
-    appbar.connect_button_press_event(move |_, event| {
+    appbar_wrap.connect_button_press_event(move |widget, event| {
         if event.button() == 1 {
-            let _ = window_for_drag.start_dragging();
+            if let Some(window) = widget.toplevel().and_downcast::<gtk::Window>() {
+                // Tauri's start_dragging does not begin a move on Wayland.
+                // GTK's button/root-coordinate call does.
+                let (root_x, root_y) = event.root();
+                window.begin_move_drag(
+                    event.button() as i32,
+                    root_x as i32,
+                    root_y as i32,
+                    event.time(),
+                );
+            }
         }
         gtk::glib::Propagation::Proceed
     });
@@ -175,7 +190,7 @@ pub fn prepare(window: &Window, app: AppHandle) {
     });
     toolbar.pack_start(&language, false, false, 0);
 
-    topbar.pack_start(&appbar, false, false, 0);
+    topbar.pack_start(&appbar_wrap, false, false, 0);
     topbar.pack_start(&toolbar, false, false, 0);
     vbox.pack_start(&topbar, false, false, 0);
     topbar.show_all();
@@ -191,7 +206,27 @@ pub fn prepare(window: &Window, app: AppHandle) {
     }
 }
 
+pub fn install_media_permissions(webview: &Webview) {
+    let _ = webview.with_webview(|platform| {
+        let view = platform.inner();
+        if let Some(settings) = WebViewExt::settings(&view) {
+            settings.set_enable_media(true);
+            settings.set_enable_media_stream(true);
+            settings.set_enable_webrtc(true);
+        }
+        view.connect_permission_request(|_, request| {
+            if request.is::<UserMediaPermissionRequest>() {
+                request.allow();
+                true
+            } else {
+                false
+            }
+        });
+    });
+}
+
 pub fn configure(window: &Window, chrome: &Webview, remote: Option<&Webview>, full_window: bool) {
+    let remote_present = remote.is_some();
     let chrome_window = window.clone();
     let _ = chrome.with_webview(move |platform| {
         let view = platform.inner();
@@ -204,6 +239,9 @@ pub fn configure(window: &Window, chrome: &Webview, remote: Option<&Webview>, fu
                 if let Some(widget) = find_by_name(&topbar, name) {
                     widget.set_sensitive(!full_window);
                 }
+            }
+            if let Some(language) = find_by_name(&topbar, LANGUAGE) {
+                language.set_visible(!remote_present);
             }
         }
         if full_window {

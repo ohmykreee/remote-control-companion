@@ -13,6 +13,8 @@ pub struct RuntimeState {
     pub settings: Settings,
     pub remote_url: Option<String>,
     pub secure_context_applied: bool,
+    #[cfg(target_os = "linux")]
+    pub secure_proxy: Option<Arc<crate::loopback_proxy::LoopbackProxy>>,
     pub overlay: bool,
     pub remote_label: Option<String>,
     pub generation: u64,
@@ -24,6 +26,8 @@ impl RuntimeState {
             settings,
             remote_url: None,
             secure_context_applied: false,
+            #[cfg(target_os = "linux")]
+            secure_proxy: None,
             overlay: false,
             remote_label: None,
             generation: 0,

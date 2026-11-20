@@ -7,6 +7,8 @@ mod layout;
 #[cfg(target_os = "linux")]
 mod linux_webview;
 mod logging;
+#[cfg(target_os = "linux")]
+mod loopback_proxy;
 mod motion;
 mod paths;
 mod remote;

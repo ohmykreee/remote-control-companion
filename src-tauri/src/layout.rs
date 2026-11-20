@@ -129,8 +129,17 @@ pub fn create_or_replace_remote(
     let next_generation = runtime.generation + 1;
     let label = format!("remote-{next_generation}");
 
-    let (args, secure_applied) = remote::browser_args(settings, url);
-    let secure_applied = secure_applied && cfg!(windows);
+    let (args, secure_from_args) = remote::browser_args(settings, url);
+    #[cfg(target_os = "linux")]
+    let (page_url, secure_proxy) = remote::linux_page_url(url, settings)?;
+    #[cfg(not(target_os = "linux"))]
+    let page_url = url.clone();
+    #[cfg(target_os = "linux")]
+    let secure_applied = secure_proxy.is_some();
+    #[cfg(target_os = "linux")]
+    let _ = secure_from_args;
+    #[cfg(not(target_os = "linux"))]
+    let secure_applied = secure_from_args;
     logging::info(&format!(
         "远端 WebView 参数准备: profile={}, secure={}, args={}",
         remote::webview_profile(&args),
@@ -142,8 +151,8 @@ pub fn create_or_replace_remote(
     fs::create_dir_all(&data_dir)
         .map_err(|error| format!("无法创建远控页面缓存，请检查 Data 目录权限（{error}）。"))?;
 
-    let script = remote::injection_script(settings, url, bridge);
-    let builder = WebviewBuilder::new(&label, WebviewUrl::External(url.clone()))
+    let script = remote::injection_script(settings, &page_url, bridge);
+    let builder = WebviewBuilder::new(&label, WebviewUrl::External(page_url.clone()))
         .data_directory(data_dir)
         .enable_clipboard_access()
         .on_permission_request(|_, _| PermissionResponse::Allow)
@@ -170,6 +179,11 @@ pub fn create_or_replace_remote(
     runtime.remote_label = Some(label);
     runtime.remote_url = Some(url.to_string());
     runtime.secure_context_applied = secure_applied;
+    #[cfg(target_os = "linux")]
+    {
+        runtime.secure_proxy = secure_proxy.map(std::sync::Arc::new);
+        crate::linux_webview::install_media_permissions(&new_webview);
+    }
     runtime.generation = next_generation;
     runtime.overlay = false;
 
