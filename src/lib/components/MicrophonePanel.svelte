@@ -209,30 +209,33 @@
 
 <style>
   .setting-section {
-    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 18px;
   }
 
   .section-heading {
-    margin-bottom: 13px;
+    margin-bottom: 0;
   }
 
   h3 {
     margin: 0;
-    font-size: 13px;
-    font-weight: 560;
+    font-size: 13.5px;
+    font-weight: 570;
     color: #edf1f8;
   }
 
   .section-heading p {
-    margin: 3px 0 0;
-    color: #78859a;
+    margin: 4px 0 0;
+    color: #7b879a;
     font-size: 11.5px;
-    line-height: 1.5;
+    line-height: 1.6;
   }
 
   .field-label {
     display: block;
-    margin-bottom: 6px;
+    margin-bottom: 0;
     color: #8d99ac;
     font-size: 11px;
   }
@@ -253,7 +256,7 @@
     display: flex;
     align-items: center;
     gap: 9px;
-    margin-top: 10px;
+    margin-top: 2px;
   }
 
   .level-status {

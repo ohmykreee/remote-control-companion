@@ -174,7 +174,9 @@
         <Dialog.Title class="dialog-title">{copy.settings.title}</Dialog.Title>
         <Dialog.Description class="dialog-description">{copy.settings.subtitle}</Dialog.Description>
       </Dialog.Header>
-      <SettingsPanel dialog />
+      <div class="settings-dialog-body">
+        <SettingsPanel dialog />
+      </div>
     </Dialog.Content>
   </Dialog.Root>
 
@@ -286,7 +288,9 @@
   }
 
   :global(.settings-dialog) {
-    max-height: min(86vh, 840px);
+    display: flex;
+    flex-direction: column;
+    max-height: min(86vh, 800px);
     overflow: hidden;
     border: 1px solid rgb(255 255 255 / 9%);
     background: #10161f;
@@ -295,19 +299,32 @@
   }
 
   :global(.settings-dialog-head) {
-    padding: 18px 20px 0;
+    flex: none;
+    padding: 20px 54px 17px 24px;
+    border-bottom: 1px solid rgb(255 255 255 / 8%);
+    background: #111821;
+  }
+
+  :global(.settings-dialog-body) {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    background: #0d131c;
   }
 
   :global(.dialog-title) {
-    font-size: 16px;
+    font-size: 17px;
     font-weight: 600;
-    color: #f0f4fb;
+    color: #f2f6fd;
+    letter-spacing: -0.01em;
   }
 
   :global(.dialog-description) {
-    margin-top: 4px;
-    color: #748195;
+    margin-top: 5px;
+    color: #7b8799;
     font-size: 11.5px;
-    line-height: 1.55;
+    line-height: 1.6;
   }
 </style>

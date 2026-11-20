@@ -232,3 +232,11 @@
   max-height: calc(100vh - var(--titlebar-height) - 24px);
 }
 
+/* Settings are grouped into distinct cards so dense controls do not run
+   together, in both the home pane and the settings dialog. */
+.settings-card {
+  border: 1px solid rgb(255 255 255 / 7%);
+  border-radius: 12px;
+  background: rgb(255 255 255 / 2%);
+}
+

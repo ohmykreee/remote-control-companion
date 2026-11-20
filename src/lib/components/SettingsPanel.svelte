@@ -1,6 +1,5 @@
 <script lang="ts">
   import { Switch } from '$lib/components/ui/switch/index.js';
-  import { Separator } from '$lib/components/ui/separator/index.js';
   import { Slider } from '$lib/components/ui/slider/index.js';
   import { Input } from '$lib/components/ui/input/index.js';
   import { Button } from '$lib/components/ui/button/index.js';
@@ -132,15 +131,16 @@
     </header>
   {/if}
 
-  <MicrophonePanel />
-
-  <Separator />
-
-  <section class="setting-section">
-    <div class="section-heading">
-      <h3>{copy.settings.window.title}</h3>
-      <p>{copy.settings.window.description}</p>
+  <div class="settings-cards">
+    <div class="settings-card">
+      <MicrophonePanel />
     </div>
+
+    <section class="setting-section settings-card">
+      <div class="section-heading">
+        <h3>{copy.settings.window.title}</h3>
+        <p>{copy.settings.window.description}</p>
+      </div>
 
     <div class="field-block">
       <div class="field-head">
@@ -241,13 +241,11 @@
     <p class="section-note">{copy.settings.window.edgeNote}</p>
   </section>
 
-  <Separator />
-
-  <section class="setting-section">
-    <div class="section-heading">
-      <h3>{copy.settings.screenshot.title}</h3>
-      <p>{copy.settings.screenshot.description}</p>
-    </div>
+    <section class="setting-section settings-card">
+      <div class="section-heading">
+        <h3>{copy.settings.screenshot.title}</h3>
+        <p>{copy.settings.screenshot.description}</p>
+      </div>
 
     <div class="toggle-row">
       <div class="toggle-copy">
@@ -278,13 +276,11 @@
     <p class="section-note">{copy.settings.screenshot.note}</p>
   </section>
 
-  <Separator />
-
-  <section class="setting-section">
-    <div class="section-heading">
-      <h3>{copy.settings.security.title}</h3>
-      <p>{copy.settings.security.description}</p>
-    </div>
+    <section class="setting-section settings-card">
+      <div class="section-heading">
+        <h3>{copy.settings.security.title}</h3>
+        <p>{copy.settings.security.description}</p>
+      </div>
 
     <div class="toggle-row">
       <div class="toggle-copy">
@@ -300,6 +296,7 @@
 
     <p class="section-note">{copy.settings.security.note}</p>
   </section>
+  </div>
 </div>
 
 <style>
@@ -310,13 +307,23 @@
   }
 
   .settings-panel.dialog {
-    max-height: min(74vh, 700px);
-    overflow-y: auto;
-    overscroll-behavior: contain;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .settings-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 0 18px 20px;
+  }
+
+  .settings-panel.dialog .settings-cards {
+    padding-top: 16px;
   }
 
   .settings-header {
-    padding: 20px 18px 14px;
+    padding: 22px 20px 16px;
   }
 
   h2 {
@@ -328,32 +335,35 @@
   }
 
   .settings-header p {
-    margin: 4px 0 0;
+    margin: 5px 0 0;
     color: #748195;
     font-size: 11.5px;
-    line-height: 1.55;
+    line-height: 1.6;
   }
 
   .setting-section {
-    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 18px;
   }
 
   .section-heading {
-    margin-bottom: 12px;
+    margin-bottom: 0;
   }
 
   h3 {
     margin: 0;
-    font-size: 13px;
-    font-weight: 560;
+    font-size: 13.5px;
+    font-weight: 570;
     color: #edf1f8;
   }
 
   .section-heading p {
-    margin: 3px 0 0;
-    color: #78859a;
+    margin: 4px 0 0;
+    color: #7b879a;
     font-size: 11.5px;
-    line-height: 1.5;
+    line-height: 1.6;
   }
 
   .toggle-row {
@@ -364,40 +374,40 @@
   }
 
   .toggle-row.sub {
-    margin-top: 12px;
-    padding-top: 12px;
-    border-top: 1px solid rgb(255 255 255 / 5%);
+    margin-top: 0;
+    padding-top: 14px;
+    border-top: 1px solid rgb(255 255 255 / 6%);
   }
 
   .toggle-copy {
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 4px;
     min-width: 0;
   }
 
   .toggle-title {
     color: #dfe6f1;
-    font-size: 12px;
+    font-size: 12.5px;
     font-weight: 500;
-    line-height: 1.4;
+    line-height: 1.45;
   }
 
   .toggle-hint {
-    color: #748196;
+    color: #78859a;
     font-size: 11px;
-    line-height: 1.5;
+    line-height: 1.55;
   }
 
   .section-note {
-    margin: 9px 0 0;
+    margin: 0;
     color: #5e6b7f;
     font-size: 10.5px;
-    line-height: 1.5;
+    line-height: 1.55;
   }
 
   .field-block {
-    margin-bottom: 14px;
+    margin-bottom: 0;
   }
 
   .field-head {
@@ -423,10 +433,10 @@
   }
 
   .field-hint {
-    margin: 5px 0 0;
-    color: #748196;
+    margin: 6px 0 0;
+    color: #78859a;
     font-size: 11px;
-    line-height: 1.5;
+    line-height: 1.55;
   }
 
   .field-hint-inline {
@@ -450,7 +460,7 @@
     display: flex;
     align-items: center;
     gap: 7px;
-    margin-top: 6px;
+    margin-top: 8px;
   }
 
   :global(.boss-input) {
@@ -487,20 +497,20 @@
   }
 
   .edge-row {
-    margin-top: 14px;
+    margin-top: 0;
     padding-top: 14px;
-    border-top: 1px solid rgb(255 255 255 / 5%);
+    border-top: 1px solid rgb(255 255 255 / 6%);
   }
 
   .motion-row {
-    margin-top: 12px;
+    margin-top: 0;
   }
 
   .edge-directions {
-    margin-top: 10px;
-    padding: 10px 11px;
+    margin-top: 0;
+    padding: 12px;
     border: 1px solid rgb(255 255 255 / 6%);
-    border-radius: 8px;
+    border-radius: 9px;
     background: rgb(255 255 255 / 1.5%);
   }
 
