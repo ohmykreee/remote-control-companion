@@ -20,6 +20,7 @@ pub struct Settings {
     pub edge_autohide: bool,
     pub edge_autohide_edges: Vec<String>,
     pub reduce_motion: bool,
+    pub language: String,
 }
 
 pub const MIN_WINDOW_OPACITY: u8 = 5;
@@ -41,6 +42,7 @@ impl Default for Settings {
             edge_autohide: false,
             edge_autohide_edges: vec!["right".to_string()],
             reduce_motion: false,
+            language: "zh".to_string(),
         }
     }
 }
@@ -74,7 +76,12 @@ impl Settings {
         self.boss_key = self.boss_key.trim().to_string();
         if self.boss_key.len() > 64 {
             self.boss_key.truncate(64);
-        }        let mut edges = Vec::new();
+        }
+        self.language = if self.language.eq_ignore_ascii_case("en") {
+            "en".to_string()
+        } else {
+            "zh".to_string()
+        };        let mut edges = Vec::new();
         for edge in &self.edge_autohide_edges {
             let normalized = edge.trim().to_ascii_lowercase();
             if EDGE_SIDES.contains(&normalized.as_str()) && !edges.contains(&normalized) {

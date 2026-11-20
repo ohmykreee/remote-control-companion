@@ -3,7 +3,7 @@
   import * as Select from '$lib/components/ui/select/index.js';
   import { Progress } from '$lib/components/ui/progress/index.js';
   import { companion } from '$lib/state.svelte';
-  import { copy } from '$lib/copy';
+  import { copy } from '$lib/copy.svelte';
 
   let devices = $state<MediaDeviceInfo[]>([]);
   let selectedLabel = $state(companion.settings.microphone_label);
@@ -195,7 +195,7 @@
         <span class="live-dot"></span>
         <span>{copy.settings.microphone.listening}</span>
       {:else}
-        <span>{preparing ? '准备中' : copy.settings.microphone.idle}</span>
+        <span>{preparing ? copy.settings.microphone.preparing : copy.settings.microphone.idle}</span>
       {/if}
     </span>
     <Progress value={level} class="mic-progress" />

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { listen } from '@tauri-apps/api/event';
   import AlertCircle from '@lucide/svelte/icons/alert-circle';
   import Loader2 from '@lucide/svelte/icons/loader-2';
   import appIcon from '../src-tauri/icons/icon.png';
@@ -11,7 +12,7 @@
   import * as Dialog from '$lib/components/ui/dialog/index.js';
   import { api } from '$lib/api';
   import { companion } from '$lib/state.svelte';
-  import { copy } from '$lib/copy';
+  import { copy, setCopyLocale } from '$lib/copy.svelte';
 
   let settingsOpen = $state(false);
   let aboutOpen = $state(false);
@@ -21,14 +22,34 @@
 
   onMount(() => {
     void companion.init();
+    let stopLanguageListener: (() => void) | undefined;
+    void listen<string>('remote-language', (event) => {
+      const language = event.payload === 'en' ? 'en' : 'zh';
+      if (companion.settings.language !== language) {
+        void companion.save({ language });
+      }
+    })
+      .then((unlisten) => {
+        stopLanguageListener = unlisten;
+      })
+      .catch(() => {
+        // Keep the saved language if remote events are unavailable.
+      });
+    return () => stopLanguageListener?.();
   });
 
   $effect(() => {
+    setCopyLocale(companion.settings.language);
     document.documentElement.classList.toggle(
       'reduce-motion',
       companion.settings.reduce_motion,
     );
   });
+
+  function backToHome(): void {
+    remoteBackdrop = null;
+    void companion.goHome();
+  }
 
   async function captureBackdrop(): Promise<void> {
     if (backdropTask) return backdropTask;
@@ -112,6 +133,7 @@
   <TitleBar
     onOpenSettings={openSettings}
     onOpenAbout={openAbout}
+    onBackToHome={backToHome}
     onMenuOpened={handleMenuOpened}
     onMenuClosed={handleMenuClosed}
   />
@@ -122,13 +144,13 @@
         <img class="loading-mark" src={appIcon} alt="" aria-hidden="true" />
         <div class="loading-line">
           <Loader2 class="size-3.5 animate-spin" />
-          <span>正在准备窗口</span>
+          <span>{copy.app.loading}</span>
         </div>
       </div>
     {:else if companion.fatalError}
       <div class="center-state">
         <div class="error-mark"><AlertCircle class="size-5" /></div>
-        <h2>窗口未能启动</h2>
+        <h2>{copy.app.bootFailed}</h2>
         <p>{companion.fatalError}</p>
       </div>
     {:else if companion.view === 'home'}
@@ -149,7 +171,7 @@
       onInteractOutside={keepTitlebarUsable}
     >
       <Dialog.Header class="settings-dialog-head">
-        <Dialog.Title class="dialog-title">设置</Dialog.Title>
+        <Dialog.Title class="dialog-title">{copy.settings.title}</Dialog.Title>
         <Dialog.Description class="dialog-description">{copy.settings.subtitle}</Dialog.Description>
       </Dialog.Header>
       <SettingsPanel dialog />

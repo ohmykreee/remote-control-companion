@@ -1,11 +1,11 @@
-<script lang="ts">
+﻿<script lang="ts">
   import Info from '@lucide/svelte/icons/info';
   import Database from '@lucide/svelte/icons/database';
   import Monitor from '@lucide/svelte/icons/monitor';
   import * as Dialog from '$lib/components/ui/dialog/index.js';
   import { Button } from '$lib/components/ui/button/index.js';
   import { companion } from '$lib/state.svelte';
-  import { copy } from '$lib/copy';
+  import { copy } from '$lib/copy.svelte';
   import appIcon from '../../../src-tauri/icons/icon.png';
 
   let {

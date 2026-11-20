@@ -5,7 +5,7 @@
   import { Checkbox } from '$lib/components/ui/checkbox/index.js';
   import SettingsPanel from './SettingsPanel.svelte';
   import { companion } from '$lib/state.svelte';
-  import { copy } from '$lib/copy';
+  import { copy } from '$lib/copy.svelte';
 
   let addressInput = $state<HTMLInputElement | null>(null);
 
@@ -28,7 +28,7 @@
 <main class="home">
   <section class="connect-pane">
     <div class="connect-content">
-      <h1>连接远控</h1>
+      <h1>{copy.home.connectTitle}</h1>
       <p class="lead">{copy.home.subtitle}</p>
 
       <form class="connect-form" onsubmit={submit}>
@@ -51,7 +51,7 @@
             }}
           />
           <Button type="submit" class="connect-button" disabled={companion.connecting}>
-            {companion.connecting ? '连接中' : copy.home.connect}
+            {companion.connecting ? copy.home.connecting : copy.home.connect}
           </Button>
         </div>
 
@@ -71,7 +71,7 @@
     </div>
 
     <div class="connect-foot">
-      <span>DSH 远控伴侣</span>
+      <span>{copy.app.name}</span>
       <span class="foot-sep">·</span>
       <span>v{companion.appInfo?.version ?? '0.1.0'}</span>
     </div>

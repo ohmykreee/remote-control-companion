@@ -1,5 +1,5 @@
 import { api, DEFAULT_SETTINGS, type AppInfo, type LayoutState, type Settings } from './api';
-import { copy } from './copy';
+import { copy, setCopyLocale } from './copy.svelte';
 import { toast } from './toast';
 
 export type ViewMode = 'home' | 'remote';
@@ -44,29 +44,28 @@ class CompanionApp {
       const boot = await api.bootstrap();
       this.appInfo = boot.app;
       this.settings = boot.settings;
+      setCopyLocale(boot.settings.language);
       this.address = boot.settings.remember_address ? boot.settings.remote_url : '';
       this.view = boot.layout.mode;
       this.overlay = boot.layout.overlay;
       this.secureContextApplied = boot.layout.secure_context_applied;
       this.ready = true;
     } catch {
-      this.fatalError = '窗口没能完成初始化，请关闭后重新打开。';
+      this.fatalError = copy.app.initFailed;
       this.ready = true;
     }
   }
 
   async save(patch: Partial<Settings>): Promise<void> {
     this.settings = { ...this.settings, ...patch };
+    setCopyLocale(this.settings.language);
     const snapshot = { ...this.settings };
     this.saveQueue = this.saveQueue
       .then(async () => {
         await api.saveSettings(snapshot);
       })
-      .catch((error: unknown) => {
-        toast(
-          typeof error === 'string' && error.trim() ? error : copy.settings.saveFailed,
-          'error',
-        );
+      .catch(() => {
+        toast(copy.settings.saveFailed, 'error');
       });
     await this.saveQueue;
   }
@@ -95,9 +94,19 @@ class CompanionApp {
       this.overlay = false;
     } catch (error) {
       this.connectError =
-        typeof error === 'string' && error.trim() ? error : copy.home.connectFailed;
+        error instanceof Error ? error.message : copy.home.connectFailed;
     } finally {
       this.connecting = false;
+    }
+  }
+
+  async goHome(): Promise<void> {
+    try {
+      const layout = await api.goHome();
+      this.applyLayout(layout);
+      this.overlay = false;
+    } catch {
+      toast(copy.remote.goHomeFailed, 'error');
     }
   }
 
@@ -107,8 +116,8 @@ class CompanionApp {
     try {
       const layout = await api.refreshRemote();
       this.applyLayout(layout);
-    } catch (error) {
-      toast(typeof error === 'string' && error.trim() ? error : copy.remote.refreshFailed, 'error');
+    } catch {
+      toast(copy.remote.refreshFailed, 'error');
     } finally {
       this.refreshing = false;
     }

@@ -3,23 +3,27 @@
   import Minus from '@lucide/svelte/icons/minus';
   import Square from '@lucide/svelte/icons/square';
   import X from '@lucide/svelte/icons/x';
+  import ChevronDown from '@lucide/svelte/icons/chevron-down';
+  import Check from '@lucide/svelte/icons/check';
   import { listen } from '@tauri-apps/api/event';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { Button } from '$lib/components/ui/button/index.js';
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu/index.js';
   import { companion } from '$lib/state.svelte';
   import { api } from '$lib/api';
-  import { copy } from '$lib/copy';
+  import { copy } from '$lib/copy.svelte';
   import { toast } from '$lib/toast';
 
   let {
     onOpenSettings,
     onOpenAbout,
+    onBackToHome,
     onMenuOpened,
     onMenuClosed,
   }: {
     onOpenSettings: () => void;
     onOpenAbout: () => void;
+    onBackToHome: () => void;
     onMenuOpened: () => void;
     onMenuClosed: () => void;
   } = $props();
@@ -85,6 +89,18 @@
     window.setTimeout(onMenuClosed, 0);
   }
 
+  function backToHome(): void {
+    onBackToHome();
+    menuOpen = false;
+    window.setTimeout(onMenuClosed, 0);
+  }
+
+  function chooseLanguage(language: 'zh' | 'en'): void {
+    if (companion.settings.language !== language) {
+      void companion.save({ language });
+    }
+  }
+
   function quit(): void {
     menuOpen = false;
     void api.quitApp();
@@ -137,6 +153,11 @@
       <DropdownMenu.Item class="app-menu-item" onSelect={openSettings}>
         {copy.titlebar.settings}
       </DropdownMenu.Item>
+      {#if companion.isRemote}
+        <DropdownMenu.Item class="app-menu-item" onSelect={backToHome}>
+          {copy.titlebar.backToHome}
+        </DropdownMenu.Item>
+      {/if}
       <DropdownMenu.Item class="app-menu-item" onSelect={openAbout}>
         {copy.titlebar.about}
       </DropdownMenu.Item>
@@ -157,8 +178,46 @@
       disabled={companion.refreshing}
       onclick={refresh}
     >
-      {companion.refreshing ? '刷新中' : '刷新'}
+      {companion.refreshing ? copy.titlebar.refreshing : copy.titlebar.refreshShort}
     </Button>
+  {:else if companion.ready}
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger>
+        {#snippet child({ props })}
+          <Button
+            {...props}
+            variant="ghost"
+            size="sm"
+            class="title-menu-button language-button"
+            aria-label={copy.language.switchTo}
+            title={copy.language.label}
+          >
+            {companion.settings.language === 'en' ? 'English' : '中文'}
+            <ChevronDown class="size-3 opacity-70" />
+          </Button>
+        {/snippet}
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Content
+        class="app-menu language-menu"
+        sideOffset={5}
+        align="start"
+      >
+        <DropdownMenu.Item
+          class="app-menu-item language-item"
+          onSelect={() => chooseLanguage('zh')}
+        >
+          <span>中文</span>
+          {#if companion.settings.language === 'zh'}<Check class="size-3.5" />{/if}
+        </DropdownMenu.Item>
+        <DropdownMenu.Item
+          class="app-menu-item language-item"
+          onSelect={() => chooseLanguage('en')}
+        >
+          <span>English</span>
+          {#if companion.settings.language === 'en'}<Check class="size-3.5" />{/if}
+        </DropdownMenu.Item>
+      </DropdownMenu.Content>
+    </DropdownMenu.Root>
   {/if}
 
   <div class="titlebar-spacer"></div>
@@ -348,5 +407,22 @@
 
   :global(.app-menu-light .app-menu-separator) {
     background: rgb(15 23 42 / 10%);
+  }
+
+  :global(.language-button) {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  :global(.language-menu) {
+    min-width: 132px;
+  }
+
+  :global(.language-item) {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
   }
 </style>

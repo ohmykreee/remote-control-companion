@@ -136,6 +136,29 @@ pub fn set_window_opacity(app: AppHandle, opacity: u8) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub async fn go_home(app: AppHandle) -> Result<LayoutState, String> {
+    tauri::async_runtime::spawn_blocking(move || go_home_blocking(app))
+        .await
+        .map_err(|error| format!("返回连接页时任务中断，请重试（{error}）。"))?
+}
+
+fn go_home_blocking(app: AppHandle) -> Result<LayoutState, String> {
+    let state = app.state::<AppState>();
+    let mut runtime = lock(&state);
+    if let Some(label) = runtime.remote_label.take() {
+        if let Some(webview) = app.get_webview(&label) {
+            let _ = webview.hide();
+            let _ = webview.close();
+        }
+    }
+    runtime.remote_url = None;
+    runtime.secure_context_applied = false;
+    runtime.overlay = false;
+    layout::sync(&app, &runtime)?;
+    Ok(layout_state(&runtime))
+}
+
+#[tauri::command]
 pub async fn open_remote(
     app: AppHandle,
     address: String,

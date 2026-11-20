@@ -16,6 +16,7 @@ export interface Settings {
   edge_autohide: boolean;
   edge_autohide_edges: EdgeSide[];
   reduce_motion: boolean;
+  language: 'zh' | 'en';
 }
 
 export interface AppInfo {
@@ -52,12 +53,14 @@ export const DEFAULT_SETTINGS: Settings = {
   edge_autohide: false,
   edge_autohide_edges: ['right'],
   reduce_motion: false,
+  language: 'zh',
 };
 
 export const api = {
   bootstrap: () => invoke<Bootstrap>('get_bootstrap'),
   saveSettings: (settings: Settings) => invoke<Settings>('save_settings', { settings }),
   setWindowOpacity: (opacity: number) => invoke<void>('set_window_opacity', { opacity }),
+  goHome: () => invoke<LayoutState>('go_home'),
   openRemote: (address: string, remember: boolean) =>
     invoke<LayoutState>('open_remote', { address, remember }),
   refreshRemote: () => invoke<LayoutState>('refresh_remote'),

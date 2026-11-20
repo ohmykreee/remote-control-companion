@@ -5,6 +5,43 @@
   var config = __DSH_COMPANION_CONFIG__;
   if (location.origin !== config.origin) return;
 
+  // Report the page language to the companion. The remote WebView has Tauri
+  // IPC available; observing the page's own `lang` attribute is more reliable
+  // than polling it from the host-side WebView2 script context.
+  try {
+    var reportLanguage = function (language) {
+      if (!language) return;
+      var webview = window.chrome && window.chrome.webview;
+      if (!webview || typeof webview.postMessage !== 'function') return;
+      webview.postMessage(
+        JSON.stringify({ type: 'companion-language', language: language }),
+      );
+    };
+    var syncLanguage = function () {
+      var raw = String(document.documentElement.getAttribute('lang') || '').toLowerCase();
+      var language = raw.indexOf('zh') === 0 ? 'zh' : raw.indexOf('en') === 0 ? 'en' : '';
+      if (language) reportLanguage(language);
+    };
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', syncLanguage, { once: true });
+    } else {
+      syncLanguage();
+    }
+    try {
+      if (document.documentElement) {
+        new MutationObserver(syncLanguage).observe(document.documentElement, {
+          attributes: true,
+          attributeFilter: ['lang'],
+        });
+      }
+    } catch (_) {
+      // The interval below still catches language changes.
+    }
+    setInterval(syncLanguage, 1000);
+  } catch (_) {
+    // Language sync is best-effort; the page continues to work without it.
+  }
+
   // Use the microphone chosen in the companion settings. Device ids in a
   // browser are scoped to the page origin, so the stored label is matched
   // against the remote page's own device list.

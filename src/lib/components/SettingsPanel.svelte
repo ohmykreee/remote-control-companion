@@ -7,7 +7,7 @@
   import { Checkbox } from '$lib/components/ui/checkbox/index.js';
   import MicrophonePanel from './MicrophonePanel.svelte';
   import { companion } from '$lib/state.svelte';
-  import { copy } from '$lib/copy';
+  import { copy } from '$lib/copy.svelte';
   import { api, type EdgeSide } from '$lib/api';
 
   let { dialog = false }: { dialog?: boolean } = $props();
@@ -17,11 +17,13 @@
   let bossError = $state('');
   let bossInput = $state<HTMLInputElement | null>(null);
 
-  const edgeOptions: { value: EdgeSide; label: string }[] = [
-    { value: 'top', label: copy.settings.window.edgeTop },
-    { value: 'left', label: copy.settings.window.edgeLeft },
-    { value: 'right', label: copy.settings.window.edgeRight },
-  ];
+  const edgeOptions: EdgeSide[] = ['top', 'left', 'right'];
+
+  function edgeLabel(edge: EdgeSide): string {
+    if (edge === 'top') return copy.settings.window.edgeTop;
+    if (edge === 'left') return copy.settings.window.edgeLeft;
+    return copy.settings.window.edgeRight;
+  }
 
   function setReplacement(checked: boolean): void {
     void companion.save({ replace_clipboard_with_vr: checked });
@@ -117,9 +119,7 @@
     if (checked) next.add(edge);
     else next.delete(edge);
     void companion.save({
-      edge_autohide_edges: edgeOptions
-        .map((option) => option.value)
-        .filter((value) => next.has(value)),
+      edge_autohide_edges: edgeOptions.filter((value) => next.has(value)),
     });
   }
 </script>
@@ -225,14 +225,14 @@
         <span class="field-hint-inline">{copy.settings.window.edgeDirectionsHint}</span>
       </div>
       <div class="edge-options">
-        {#each edgeOptions as option (option.value)}
+        {#each edgeOptions as edge (edge)}
           <label class="edge-choice">
             <Checkbox
-              checked={hasEdge(option.value)}
-              onCheckedChange={(checked) => setEdge(option.value, checked === true)}
-              aria-label={option.label}
+              checked={hasEdge(edge)}
+              onCheckedChange={(checked) => setEdge(edge, checked === true)}
+              aria-label={edgeLabel(edge)}
             />
-            <span>{option.label}</span>
+            <span>{edgeLabel(edge)}</span>
           </label>
         {/each}
       </div>

@@ -3,6 +3,7 @@ mod bridge;
 mod capture;
 mod commands;
 mod layout;
+mod language;
 mod logging;
 mod motion;
 mod paths;
@@ -54,6 +55,7 @@ pub fn run() {
             commands::get_bootstrap,
             commands::save_settings,
             commands::set_window_opacity,
+            commands::go_home,
             commands::open_remote,
             commands::refresh_remote,
             commands::capture_remote_backdrop,

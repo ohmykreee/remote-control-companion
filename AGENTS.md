@@ -20,7 +20,7 @@ src/                      Svelte 渲染层（本地 chrome WebView）
   App.svelte              外壳、布局状态、设置弹窗、覆盖层
   lib/
     api.ts                Tauri command 契约与类型
-    copy.ts               全部界面文案
+    copy.svelte.ts        中英文文案对象、当前语言状态与 `copy` 代理
     state.svelte.ts       应用状态、URL 规范化、加载/刷新流程
     components/
       TitleBar.svelte     自绘标题栏、应用菜单、刷新、窗口按钮
@@ -36,6 +36,7 @@ src-tauri/src/
   remote.rs               URL、安全上下文参数、远端初始化脚本
   backdrop.rs             用 WebView2 自身截取远控画面，作为菜单模糊背景
   motion.rs               把减少动态效果同步给远控页面的 prefers-reduced-motion
+  language.rs             通过 WebView2 消息接收远控页面语言
   window_behavior.rs      窗口透明度、全局老板键、靠边隐藏滑动
   theme.rs                读取远控页面亮/暗主题并同步标题栏
   settings.rs             Data/settings.json
@@ -118,8 +119,9 @@ Tauri 命令里直接调用 `Window::add_child` / `Webview::set_size` 会在某�
 - 标题栏按钮需要比 drag 层更高的 z-index。
 - 按钮使用 shadcn `Button`；图标只用 Lucide。禁止手绘功能图标。
 - 左侧只保留「应用」和（连接后）「刷新」两个平铺文字项；不要放 logo。应用图标只用于窗口/任务栏。
-- 应用菜单的顺序是置顶/取消置顶、设置、关于本软件、分隔线、退出。置顶状态通过
-  `core:window:allow-is-always-on-top` / `allow-set-always-on-top` 查询和切换，不持久化。
+- 应用菜单的顺序是置顶/取消置顶、分隔线、设置、回到连接页（仅远控页面）、关于本软件、分隔线、退出。
+  置顶状态通过 `core:window:allow-is-always-on-top` / `allow-set-always-on-top` 查询和切换，不持久化。
+- 连接页标题栏显示语言下拉菜单；进入远控后隐藏。语言选项只写入本地设置。
 - 打开菜单时远端页面会隐藏；关闭菜单要恢复。
 - 设置、关于等所有弹窗的遮罩从标题栏下方开始（`inset: var(--titlebar-height) 0 0 0`），标题栏
   `z-index: 60` 且 `pointer-events: auto`，弹窗内容也整体下移；打开弹窗后标题栏必须保持清晰、可点击、
@@ -164,6 +166,20 @@ Tauri 命令里直接调用 `Window::add_child` / `Webview::set_size` 会在某�
 - 不要轮询整页截图判断主题，也不要修改远控页面的主题。查询失败或页面加载中时保留上一次主题，避免标题栏闪烁；
   没有远控页面时标题栏保持暗色。
 - 亮色标题栏使用 `#eef2f8`，菜单使用白底深色文字；暗色保持现有风格。标题栏之外的主界面仍按暗色设计。
+
+### i18n 与语言同步
+
+- 全部本地界面文案在 `src/lib/copy.svelte.ts`，**中文一个对象、英文一个对象**，由 `copy` Proxy 按当前语言返回；
+  `setCopyLocale` 维护当前语言。组件中不要新增硬编码中文/英文，两个对象的键必须保持一致。
+- App 在设置加载、用户选择语言、远控页面报告语言时更新文案；设置字段 `language` 只接受 `zh` / `en`，
+  下次启动由 `get_bootstrap` 恢复。连接页标题栏显示语言菜单，进入远控后隐藏。
+- 远控页面语言是连接后的权威值：`remote_bootstrap.js` 观察 `<html lang>` 并通过
+  `window.chrome.webview.postMessage` 发出消息；`language.rs` 安装 WebView2 消息监听并发出
+  `remote-language`；App 收到后保存设置。不要改用 Tauri command（远端 WebView 没有对应权限）。
+- 不要在批量替换 UTF-8 文本时使用 PowerShell `Get-Content`/`Set-Content`：本机 PowerShell 曾把中文变成乱码。
+  使用编辑工具或显式 UTF-8 读写。
+- “回到连接页”走 `go_home`：关闭远端 WebView、清空运行时的 remote URL/overlay，并重新同步本地 chrome；
+  菜单项只在远控模式显示。
 
 ### 远端权限与麦克风
 
@@ -272,15 +288,15 @@ pnpm dlx shadcn-svelte@latest add <component> --overwrite --yes
 - 提示语尽量一句话；范围和限制只在会影响用户决策时出现，不在 README 里展开机制。
 - 错误信息要告诉用户下一步能做什么，不要只抛内部错误名或后端状态。
 - 诊断 / 系统信息页可以展示排障需要的版本、路径与平台信息；这些是诊断数据，不是功能说明。
-- 新增或修改文案时同步多语言字典并重新构建对应产物。本项目当前只有简体中文，界面文案集中在
-  `src/lib/copy.ts`；后端给用户看的中文错误在 `src-tauri/src/`（尤其 `capture.rs`、`remote.rs`）。
-  当一个字符串同时出现在 UI 和错误路径时，两处必须保持同一措辞。
+- 新增或修改文案时同步中英文两个对象并重新构建。本项目当前只有简体中文和英文，界面文案集中在
+  `src/lib/copy.svelte.ts`；后端给用户看的中文错误在 `src-tauri/src/`（尤其 `capture.rs`、`remote.rs`）。
+  本地界面只显示本地化后的通用错误，不直接展示后端中文错误。
 - 修改插件（dsh-remote-control）时按插件要求同步 **侧边栏 / Host / 手机端三份字典**。
 - README 只写功能、安装摘要、使用方式、平台支持与已知限制；架构、协议、构建细节放本文件。
 
 ## 文案与界面同步
 
-- 新增设置项时同步：`src/lib/copy.ts`、`src/lib/components/SettingsPanel.svelte`、`src-tauri/src/settings.rs`
+- 新增设置项时同步：`src/lib/copy.svelte.ts`、`src/lib/components/SettingsPanel.svelte`、`src-tauri/src/settings.rs`
   （字段、默认值、sanitize、持久化）。
 - 与远端页面有关的设置项要明确“刷新后生效”还是“重连后生效”。窗口透明度、老板键、靠边隐藏属于本地窗口行为，
   不需要刷新远控页面。新增窗口字段时同时检查 `window_behavior::apply_*` 的启动应用路径。
@@ -293,6 +309,7 @@ pnpm dlx shadcn-svelte@latest add <component> --overwrite --yes
   - 已用真实鼠标事件验证标题栏拖动、应用菜单、设置弹窗、窗口最大化和还原。
   - 已验证应用菜单置顶、窗口透明度、老板键、靠边隐藏及滑动恢复。
   - 已验证远控页面亮/暗主题切换会同步标题栏和菜单配色。
+  - 已验证连接页语言切换、远控页面语言回报与保存、回到连接页。
   - 已验证开启减少动态效果后靠边隐藏不再播放滑动。
   - 已验证减少动态效果通过 CDP 同步到远控页面，`matchMedia` 收到 change 事件。
   - 已用 LAN http 地址验证安全上下文豁免（`window.isSecureContext === true`）和远端独立调试端口。
