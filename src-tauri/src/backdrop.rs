@@ -11,9 +11,7 @@ pub fn capture_preview(
     use std::ffi::c_void;
 
     use webview2_com::CapturePreviewCompletedHandler;
-    use webview2_com::Microsoft::Web::WebView2::Win32::{
-        COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_JPEG,
-    };
+    use webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_JPEG;
     use windows::Win32::System::Com::{IStream, STREAM_SEEK_SET};
     use windows::Win32::UI::Shell::SHCreateMemStream;
 
@@ -36,7 +34,8 @@ pub fn capture_preview(
 
     let handler = CapturePreviewCompletedHandler::create(Box::new(move |result| {
         let outcome = (|| -> Result<Vec<u8>, String> {
-            result.map_err(|error| format!("无法截取远控画面（{error}）。"))?;            unsafe {
+            result.map_err(|error| format!("无法截取远控画面（{error}）。"))?;
+            unsafe {
                 stream_for_callback
                     .Seek(0, STREAM_SEEK_SET, None)
                     .map_err(|error| format!("无法读取背景截图（{error}）。"))?;

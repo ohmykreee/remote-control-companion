@@ -19,10 +19,14 @@
   let menuOpen = $state(false);
   let remoteBackdrop = $state<string | null>(null);
   let backdropTask: Promise<void> | null = null;
+  const linux = $derived(companion.appInfo?.platform.startsWith('Linux') ?? false);
 
   onMount(() => {
     void companion.init();
     let stopLanguageListener: (() => void) | undefined;
+    let stopSettingsListener: (() => void) | undefined;
+    let stopBackListener: (() => void) | undefined;
+    let stopRefreshListener: (() => void) | undefined;
     void listen<string>('remote-language', (event) => {
       const language = event.payload === 'en' ? 'en' : 'zh';
       if (companion.settings.language !== language) {
@@ -35,7 +39,51 @@
       .catch(() => {
         // Keep the saved language if remote events are unavailable.
       });
-    return () => stopLanguageListener?.();
+    void listen('linux-open-settings', () => openSettings())
+      .then((unlisten) => {
+        stopSettingsListener = unlisten;
+      })
+      .catch(() => {});
+    void listen('linux-open-about', () => openAbout())
+      .then((unlisten) => {
+        // Reuse the settings listener slot for the native About action.
+        const previous = stopSettingsListener;
+        stopSettingsListener = () => {
+          previous?.();
+          unlisten();
+        };
+      })
+      .catch(() => {});
+    void listen<string>('linux-set-language', (event) => {
+      const language = event.payload === 'en' ? 'en' : 'zh';
+      if (companion.settings.language !== language) {
+        void companion.save({ language });
+      }
+    })
+      .then((unlisten) => {
+        const previous = stopLanguageListener;
+        stopLanguageListener = () => {
+          previous?.();
+          unlisten();
+        };
+      })
+      .catch(() => {});
+    void listen('linux-back-home', () => backToHome())
+      .then((unlisten) => {
+        stopBackListener = unlisten;
+      })
+      .catch(() => {});
+    void listen('linux-refresh', () => void companion.refresh())
+      .then((unlisten) => {
+        stopRefreshListener = unlisten;
+      })
+      .catch(() => {});
+    return () => {
+      stopLanguageListener?.();
+      stopSettingsListener?.();
+      stopBackListener?.();
+      stopRefreshListener?.();
+    };
   });
 
   $effect(() => {
@@ -130,13 +178,15 @@
 </script>
 
 <div class="app-shell">
-  <TitleBar
-    onOpenSettings={openSettings}
-    onOpenAbout={openAbout}
-    onBackToHome={backToHome}
-    onMenuOpened={handleMenuOpened}
-    onMenuClosed={handleMenuClosed}
-  />
+  {#if !linux}
+    <TitleBar
+      onOpenSettings={openSettings}
+      onOpenAbout={openAbout}
+      onBackToHome={backToHome}
+      onMenuOpened={handleMenuOpened}
+      onMenuClosed={handleMenuClosed}
+    />
+  {/if}
 
   <div class="app-body">
     {#if !companion.ready}
@@ -308,6 +358,7 @@
   :global(.settings-dialog-body) {
     flex: 1;
     min-height: 0;
+    overflow-x: hidden;
     overflow-y: auto;
     overscroll-behavior: contain;
     scrollbar-gutter: stable;

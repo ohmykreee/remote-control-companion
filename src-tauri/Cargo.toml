@@ -41,6 +41,11 @@ windows = { version = "0.62", features = [
 ] }
 windows-sys = { version = "0.61", features = ["Win32_Media_Audio"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+javascriptcore-rs = "1.1.2"
+webkit2gtk = { version = "2", features = ["v2_40"] }
+
 [features]
 custom-protocol = ["tauri/custom-protocol"]
 

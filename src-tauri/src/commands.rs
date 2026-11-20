@@ -33,6 +33,7 @@ pub struct Bootstrap {
     pub app: AppInfo,
     pub settings: Settings,
     pub layout: LayoutState,
+    pub test_open_url: Option<String>,
 }
 
 fn app_info() -> AppInfo {
@@ -41,6 +42,8 @@ fn app_info() -> AppInfo {
         version: env!("CARGO_PKG_VERSION").to_string(),
         platform: if cfg!(windows) {
             "Windows 10/11 · x64".to_string()
+        } else if cfg!(target_os = "linux") {
+            "Linux · x64".to_string()
         } else {
             std::env::consts::OS.to_string()
         },
@@ -88,6 +91,10 @@ pub fn get_bootstrap(app: AppHandle) -> Bootstrap {
         app: app_info(),
         settings: runtime.settings.clone(),
         layout: layout_state(&runtime),
+        test_open_url: std::env::var("DSH_COMPANION_TEST_OPEN_URL")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
     }
 }
 
@@ -109,6 +116,8 @@ fn save_settings_blocking(app: AppHandle, settings: Settings) -> Result<Settings
         runtime.settings = next.clone();
         previous
     };
+    #[cfg(target_os = "linux")]
+    crate::linux_webview::set_language(&app, &next.language);
 
     if let Some(window) = app.get_window(layout::WINDOW_LABEL) {
         window_behavior::apply_opacity(&window, next.window_opacity)?;

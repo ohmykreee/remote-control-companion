@@ -31,6 +31,7 @@ const page = String.raw`<!doctype html>
 </style>
 </head>
 <body>
+<div id="diag" style="position:fixed;top:0;left:0;right:0;z-index:9999;background:rgba(0,0,0,.82);color:#9ff;font:12px monospace;padding:6px 10px;white-space:pre-wrap"></div>
 <main>
   <div class="eyebrow">MOCK DSH REMOTE CONTROL</div>
   <h1>远控页面已连接</h1>
@@ -43,6 +44,8 @@ const page = String.raw`<!doctype html>
   <div class="actions">
     <button class="primary" id="capture">获取 VR 截图</button>
     <button id="askmic">请求麦克风</button>
+    <button id="theme">切换主题</button>
+    <button id="language">切换语言</button>
     <button id="reload">重新载入</button>
   </div>
   <pre id="log">等待操作…</pre>
@@ -51,8 +54,12 @@ const page = String.raw`<!doctype html>
 </main>
 <script>
   const $ = (id) => document.getElementById(id);
+  const diag = (value) => {
+    $('diag').textContent = String(value);
+  };
   function log(value) {
     $('log').textContent = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+    diag(value);
   }
   $('secure').textContent = window.isSecureContext ? '安全' : '不安全';
   $('secure').className = 'value ' + (window.isSecureContext ? 'ok' : 'bad');
@@ -62,6 +69,7 @@ const page = String.raw`<!doctype html>
     const api = window.__DSH_COMPANION__;
     $('api').textContent = api && typeof api.captureVrScreenshot === 'function' ? '可用' : '不可用';
     $('api').className = 'value ' + (api && api.captureVrScreenshot ? 'ok' : 'bad');
+    if (!diag.textContent) diag('API=' + (api && api.captureVrScreenshot ? 'available' : 'missing') + ' lang=' + document.documentElement.lang);
     return api;
   }
   detectApi();
@@ -100,6 +108,48 @@ const page = String.raw`<!doctype html>
   });
 
   $('reload').addEventListener('click', () => location.reload());
+
+  const params = new URLSearchParams(location.search);
+  let light = false;
+  function applyTheme(value, announce = true) {
+    light = value;
+    document.body.dataset.theme = light ? 'light' : 'dark';
+    document.documentElement.classList.toggle('light', light);
+    document.documentElement.classList.toggle('dark', !light);
+    document.documentElement.style.colorScheme = light ? 'light' : 'dark';
+    document.body.style.background = light
+      ? 'radial-gradient(800px 500px at 20% -10%, #e7effc, #f7f9fd 65%)'
+      : 'radial-gradient(800px 500px at 20% -10%, #1c315f, #090d14 65%)';
+    document.body.style.color = light ? '#162033' : '#e8eef9';
+    if (announce) log('主题已切换: ' + (light ? 'light' : 'dark'));
+  }
+  applyTheme(params.get('theme') === 'light', false);
+  $('theme').addEventListener('click', () => applyTheme(!light));
+
+  let english = false;
+  function applyLanguage(value, announce = true) {
+    english = value;
+    document.documentElement.lang = english ? 'en-US' : 'zh-CN';
+    document.querySelector('h1').textContent = english ? 'Remote page connected' : '远控页面已连接';
+    if (announce) log('语言已切换: ' + document.documentElement.lang);
+  }
+  applyLanguage(params.get('lang') === 'en', false);
+  $('language').addEventListener('click', () => applyLanguage(!english));
+
+  if (params.get('auto') === '1') {
+    let tick = 0;
+    setInterval(() => {
+      tick += 1;
+      applyTheme(tick % 2 === 1);
+      applyLanguage(tick % 2 === 1);
+    }, 2000);
+  }
+  if (params.get('capture') === '1') {
+    setTimeout(() => {
+      diag('API=' + (window.__DSH_COMPANION__ ? 'available' : 'missing') + '; requesting capture');
+      $('capture').click();
+    }, 2500);
+  }
 </script>
 </body>
 </html>`;

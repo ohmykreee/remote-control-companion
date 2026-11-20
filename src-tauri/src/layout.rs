@@ -17,10 +17,7 @@ pub fn client_logical_size(window: &tauri::Window) -> Result<(f64, f64), String>
         .inner_size()
         .map_err(|error| format!("无法读取窗口尺寸（{error}）。"))?;
     let scale = window.scale_factor().unwrap_or(1.0);
-    Ok((
-        size.width as f64 / scale,
-        size.height as f64 / scale,
-    ))
+    Ok((size.width as f64 / scale, size.height as f64 / scale))
 }
 fn get_window(app: &AppHandle) -> Result<tauri::Window, String> {
     app.get_window(WINDOW_LABEL)
@@ -40,43 +37,49 @@ pub fn sync(app: &AppHandle, runtime: &crate::state::RuntimeState) -> Result<(),
 
     let show_full = runtime.remote_url.is_none() || runtime.overlay;
 
-    if show_full {
-        if let Some(remote) = &remote_webview {
-            let _ = remote.hide();
-        }
-        chrome
-            .set_position(tauri::LogicalPosition::new(0.0, 0.0))
-            .map_err(|error| format!("无法调整窗口布局（{error}）。"))?;
-        chrome
-            .set_size(tauri::LogicalSize::new(
-                width.max(1.0),
-                height.max(1.0),
-            ))
-            .map_err(|error| format!("无法调整窗口布局（{error}）。"))?;
-    } else {
-        // Shrink the chrome first; the remote webview is shown only after the
-        // titlebar-only strip is in place so the two never overlap.
-        chrome
-            .set_position(tauri::LogicalPosition::new(0.0, 0.0))
-            .map_err(|error| format!("无法调整窗口布局（{error}）。"))?;
-        chrome
-            .set_size(tauri::LogicalSize::new(
-                width.max(1.0),
-                TITLEBAR_HEIGHT.min(height.max(1.0)),
-            ))
-            .map_err(|error| format!("无法调整窗口布局（{error}）。"))?;
+    #[cfg(target_os = "linux")]
+    {
+        let _ = (width, height);
+        crate::linux_webview::configure(&window, &chrome, remote_webview.as_ref(), show_full);
+    }
 
-        if let Some(remote) = &remote_webview {
-            remote
-                .set_position(tauri::LogicalPosition::new(0.0, TITLEBAR_HEIGHT))
-                .map_err(|error| format!("无法调整远控页面（{error}）。"))?;
-            remote
+    #[cfg(not(target_os = "linux"))]
+    {
+        if show_full {
+            if let Some(remote) = &remote_webview {
+                let _ = remote.hide();
+            }
+            chrome
+                .set_position(tauri::LogicalPosition::new(0.0, 0.0))
+                .map_err(|error| format!("无法调整窗口布局（{error}）。"))?;
+            chrome
+                .set_size(tauri::LogicalSize::new(width.max(1.0), height.max(1.0)))
+                .map_err(|error| format!("无法调整窗口布局（{error}）。"))?;
+        } else {
+            // Shrink the chrome first; the remote webview is shown only after
+            // the titlebar-only strip is in place so the two never overlap.
+            chrome
+                .set_position(tauri::LogicalPosition::new(0.0, 0.0))
+                .map_err(|error| format!("无法调整窗口布局（{error}）。"))?;
+            chrome
                 .set_size(tauri::LogicalSize::new(
                     width.max(1.0),
-                    (height - TITLEBAR_HEIGHT).max(1.0),
+                    TITLEBAR_HEIGHT.min(height.max(1.0)),
                 ))
-                .map_err(|error| format!("无法调整远控页面（{error}）。"))?;
-            let _ = remote.show();
+                .map_err(|error| format!("无法调整窗口布局（{error}）。"))?;
+
+            if let Some(remote) = &remote_webview {
+                remote
+                    .set_position(tauri::LogicalPosition::new(0.0, TITLEBAR_HEIGHT))
+                    .map_err(|error| format!("无法调整远控页面（{error}）。"))?;
+                remote
+                    .set_size(tauri::LogicalSize::new(
+                        width.max(1.0),
+                        (height - TITLEBAR_HEIGHT).max(1.0),
+                    ))
+                    .map_err(|error| format!("无法调整远控页面（{error}）。"))?;
+                let _ = remote.show();
+            }
         }
     }
     Ok(())
@@ -100,13 +103,17 @@ pub fn create_chrome_webview(app: &AppHandle) -> Result<(), String> {
         "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port=9222",
     );
 
-    window
+    let chrome = window
         .add_child(
             builder,
             tauri::LogicalPosition::new(0.0, 0.0),
             tauri::LogicalSize::new(width.max(1.0), height.max(1.0)),
         )
         .map_err(|error| format!("无法创建主窗口内容（{error}）。"))?;
+    #[cfg(target_os = "linux")]
+    crate::linux_webview::configure(&window, &chrome, None, true);
+    #[cfg(not(target_os = "linux"))]
+    let _ = &chrome;
     Ok(())
 }
 
@@ -123,6 +130,7 @@ pub fn create_or_replace_remote(
     let label = format!("remote-{next_generation}");
 
     let (args, secure_applied) = remote::browser_args(settings, url);
+    let secure_applied = secure_applied && cfg!(windows);
     logging::info(&format!(
         "远端 WebView 参数准备: profile={}, secure={}, args={}",
         remote::webview_profile(&args),
@@ -135,7 +143,7 @@ pub fn create_or_replace_remote(
         .map_err(|error| format!("无法创建远控页面缓存，请检查 Data 目录权限（{error}）。"))?;
 
     let script = remote::injection_script(settings, url, bridge);
-    let mut builder = WebviewBuilder::new(&label, WebviewUrl::External(url.clone()))
+    let builder = WebviewBuilder::new(&label, WebviewUrl::External(url.clone()))
         .data_directory(data_dir)
         .enable_clipboard_access()
         .on_permission_request(|_, _| PermissionResponse::Allow)
@@ -143,21 +151,15 @@ pub fn create_or_replace_remote(
         .disable_drag_drop_handler();
 
     #[cfg(windows)]
-    {
-        builder = builder.additional_browser_args(&args);
-    }
+    let builder = builder.additional_browser_args(&args);
 
     let new_webview = window
         .add_child(
             builder,
             tauri::LogicalPosition::new(0.0, TITLEBAR_HEIGHT),
-            tauri::LogicalSize::new(
-                width.max(1.0),
-                (height - TITLEBAR_HEIGHT).max(1.0),
-            ),
+            tauri::LogicalSize::new(width.max(1.0), (height - TITLEBAR_HEIGHT).max(1.0)),
         )
         .map_err(|error| format!("无法打开远控页面，请确认地址可访问（{error}）。"))?;
-
     if let Some(old_label) = runtime.remote_label.take() {
         if let Some(old) = app.get_webview(&old_label) {
             let _ = old.hide();

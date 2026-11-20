@@ -37,6 +37,7 @@ export interface Bootstrap {
   app: AppInfo;
   settings: Settings;
   layout: LayoutState;
+  test_open_url?: string | null;
 }
 
 export const DEFAULT_SETTINGS: Settings = {

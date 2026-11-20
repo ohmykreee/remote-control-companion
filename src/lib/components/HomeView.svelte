@@ -204,11 +204,12 @@
   .settings-pane {
     min-width: 0;
     min-height: 0;
+    overflow-x: hidden;
     overflow-y: auto;
     background: #0d121a;
   }
 
-  @media (max-width: 800px) {
+  @media (max-width: 720px) {
     .home {
       grid-template-columns: 1fr;
       overflow-y: auto;

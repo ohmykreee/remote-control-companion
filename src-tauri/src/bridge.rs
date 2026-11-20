@@ -51,25 +51,27 @@ pub fn start(app: AppHandle, listener: std::net::TcpListener) {
     });
 }
 
+#[allow(clippy::result_large_err)]
 async fn handle_connection(app: AppHandle, stream: TcpStream) -> Result<(), String> {
     let token = app.state::<AppState>().bridge.token.clone();
-    let callback = move |request: &Request, response: Response| -> Result<Response, ErrorResponse> {
-        let authorized = request
-            .uri()
-            .query()
-            .and_then(token_from_query)
-            .map(|candidate| constant_time_eq(candidate.as_bytes(), token.as_bytes()))
-            .unwrap_or(false);
-        if authorized {
-            Ok(response)
-        } else {
-            let mut denied = tokio_tungstenite::tungstenite::http::Response::new(Some(
-                "Unauthorized".to_string(),
-            ));
-            *denied.status_mut() = StatusCode::UNAUTHORIZED;
-            Err(denied)
-        }
-    };
+    let callback =
+        move |request: &Request, response: Response| -> Result<Response, ErrorResponse> {
+            let authorized = request
+                .uri()
+                .query()
+                .and_then(token_from_query)
+                .map(|candidate| constant_time_eq(candidate.as_bytes(), token.as_bytes()))
+                .unwrap_or(false);
+            if authorized {
+                Ok(response)
+            } else {
+                let mut denied = tokio_tungstenite::tungstenite::http::Response::new(Some(
+                    "Unauthorized".to_string(),
+                ));
+                *denied.status_mut() = StatusCode::UNAUTHORIZED;
+                Err(denied)
+            }
+        };
 
     let mut websocket = tokio_tungstenite::accept_hdr_async(stream, callback)
         .await
@@ -110,7 +112,12 @@ async fn handle_connection(app: AppHandle, stream: TcpStream) -> Result<(), Stri
             .map(|runtime| runtime.settings.clone())
             .unwrap_or_default();
         if !settings.replace_clipboard_with_vr {
-            send_error(&mut websocket, &id, "VR 截图已关闭，请在伴侣软件的设置中开启。").await?;
+            send_error(
+                &mut websocket,
+                &id,
+                "VR 截图已关闭，请在伴侣软件的设置中开启。",
+            )
+            .await?;
             continue;
         }
 

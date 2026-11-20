@@ -908,7 +908,9 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "futures-util",
+ "gtk",
  "image",
+ "javascriptcore-rs",
  "libloading 0.8.9",
  "rand 0.9.5",
  "serde",
@@ -920,6 +922,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tokio",
  "tokio-tungstenite",
+ "webkit2gtk",
  "webview2-com",
  "windows",
  "windows-sys 0.61.2",

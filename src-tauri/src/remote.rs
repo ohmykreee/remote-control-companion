@@ -4,8 +4,7 @@ use sha2::{Digest, Sha256};
 use crate::settings::Settings;
 use crate::state::BridgeInfo;
 
-const DEFAULT_BROWSER_ARGS: &str =
-    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection";
+const DEFAULT_BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection";
 
 pub fn normalize_remote_url(raw: &str) -> Result<tauri::Url, String> {
     let value = raw.trim();
@@ -85,6 +84,7 @@ pub fn injection_script(settings: &Settings, url: &tauri::Url, bridge: &BridgeIn
         "origin": url.origin().ascii_serialization(),
         "microphoneLabel": settings.microphone_label,
         "vrScreenshot": settings.replace_clipboard_with_vr,
+        "reduceMotion": settings.reduce_motion,
         "bridgeUrl": bridge_url,
     });
 
@@ -124,7 +124,9 @@ mod tests {
         let http = normalize_remote_url("http://192.168.1.20:38765/").unwrap();
         let (args, applied) = browser_args(&settings, &http);
         assert!(applied);
-        assert!(args.contains("--unsafely-treat-insecure-origin-as-secure=http://192.168.1.20:38765"));
+        assert!(
+            args.contains("--unsafely-treat-insecure-origin-as-secure=http://192.168.1.20:38765")
+        );
 
         let https = normalize_remote_url("https://example.com/").unwrap();
         settings.force_secure_context = true;

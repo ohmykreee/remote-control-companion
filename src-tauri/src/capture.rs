@@ -1,14 +1,26 @@
-use std::ffi::CString;
-use std::fs;
 use std::io::Cursor;
-use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
+
+#[cfg(any(windows, target_os = "linux"))]
+use std::ffi::CString;
+#[cfg(any(windows, target_os = "linux"))]
+use std::fs;
+#[cfg(any(windows, target_os = "linux"))]
+use std::path::Path;
+#[cfg(any(windows, target_os = "linux", test))]
+use std::path::PathBuf;
+#[cfg(any(windows, target_os = "linux"))]
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::settings::Settings;
 
+#[cfg(any(windows, target_os = "linux"))]
 const VR_APPLICATION_OVERLAY: i32 = 2;
+#[cfg(any(windows, target_os = "linux"))]
 const VR_INIT_ERROR_NONE: i32 = 0;
+#[cfg(any(windows, target_os = "linux"))]
 const SCREENSHOT_INTERFACE: &str = "FnTable:IVRScreenshots_001";
+#[cfg(any(windows, target_os = "linux"))]
 const SCREENSHOT_TIMEOUT: Duration = Duration::from_secs(10);
 const COUNTDOWN_SOUND: &[u8] = include_bytes!("../assets/capture-countdown.wav");
 
@@ -28,9 +40,13 @@ pub fn capture(settings: &Settings) -> Result<Vec<u8>, String> {
     {
         platform::capture_openvr()
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
     {
-        Err("VR 截图目前只支持 Windows。".to_string())
+        platform::capture_linux()
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        Err("VR 截图目前只支持 Windows 和 Linux。".to_string())
     }
 }
 
@@ -52,8 +68,36 @@ fn three_second_countdown() {
         return;
     }
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(path) = write_countdown_file() {
+            for player in ["pw-play", "paplay"] {
+                if std::process::Command::new(player)
+                    .arg(&path)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                    .is_ok()
+                {
+                    break;
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_secs(3));
+    }
+
+    #[cfg(not(any(windows, target_os = "linux")))]
     std::thread::sleep(Duration::from_secs(3));
+}
+
+#[cfg(target_os = "linux")]
+fn write_countdown_file() -> Option<std::path::PathBuf> {
+    let path = crate::paths::cache_dir().join("capture-countdown.wav");
+    if std::fs::write(&path, COUNTDOWN_SOUND).is_ok() {
+        Some(path)
+    } else {
+        None
+    }
 }
 
 fn crop_preview(png_bytes: &[u8]) -> Result<Vec<u8>, String> {
@@ -73,7 +117,7 @@ fn crop_preview(png_bytes: &[u8]) -> Result<Vec<u8>, String> {
     Ok(encoded.into_inner())
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 mod platform {
     use super::*;
     use libloading::{Library, Symbol};
@@ -83,21 +127,11 @@ mod platform {
     type FnIsHmdPresent = unsafe extern "C" fn() -> bool;
     type FnInit = unsafe extern "C" fn(*mut i32, i32) -> *mut c_void;
     type FnShutdown = unsafe extern "C" fn();
-    type FnGetGenericInterface =
-        unsafe extern "C" fn(*const c_char, *mut i32) -> *mut c_void;
-    type FnTakeStereo = unsafe extern "C" fn(
-        *mut u32,
-        *const c_char,
-        *const c_char,
-    ) -> i32;
+    type FnGetGenericInterface = unsafe extern "C" fn(*const c_char, *mut i32) -> *mut c_void;
+    type FnTakeStereo = unsafe extern "C" fn(*mut u32, *const c_char, *const c_char) -> i32;
 
-    type FnGetScreenshotFilename = unsafe extern "C" fn(
-        u32,
-        i32,
-        *mut c_char,
-        u32,
-        *mut i32,
-    ) -> u32;
+    type FnGetScreenshotFilename =
+        unsafe extern "C" fn(u32, i32, *mut c_char, u32, *mut i32) -> u32;
 
     #[repr(C)]
     struct ScreenshotFnTable {
@@ -112,6 +146,7 @@ mod platform {
 
     const _: () = assert!(std::mem::size_of::<ScreenshotFnTable>() == 7 * 8);
 
+    #[cfg(windows)]
     fn library_candidates() -> Vec<PathBuf> {
         let mut candidates = Vec::new();
         if let Ok(exe) = std::env::current_exe() {
@@ -121,10 +156,13 @@ mod platform {
         }
 
         if let Ok(local) = std::env::var("LOCALAPPDATA") {
-            let vrpath = PathBuf::from(local).join("openvr").join("openvrpaths.vrpath");
+            let vrpath = PathBuf::from(local)
+                .join("openvr")
+                .join("openvrpaths.vrpath");
             if let Ok(text) = fs::read_to_string(vrpath) {
                 if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
-                    if let Some(runtimes) = value.get("runtime").and_then(|value| value.as_array()) {
+                    if let Some(runtimes) = value.get("runtime").and_then(|value| value.as_array())
+                    {
                         for runtime in runtimes.iter().filter_map(|value| value.as_str()) {
                             candidates.push(
                                 PathBuf::from(runtime)
@@ -151,6 +189,79 @@ mod platform {
                         .join("openvr_api.dll"),
                 );
             }
+        }
+
+        candidates
+            .into_iter()
+            .filter(|candidate| candidate.is_file())
+            .collect()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn library_candidates() -> Vec<PathBuf> {
+        let mut candidates = Vec::new();
+        if let Ok(path) = std::env::var("DSH_COMPANION_OPENVR_PATH") {
+            if !path.trim().is_empty() {
+                candidates.push(PathBuf::from(path));
+            }
+        }
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(parent) = exe.parent() {
+                candidates.push(parent.join("libopenvr_api.so"));
+                candidates.push(parent.join("openvr_api.so"));
+            }
+        }
+
+        if let Ok(home) = std::env::var("HOME") {
+            let home = PathBuf::from(home);
+            for config in [
+                ".config/openvr/openvrpaths.vrpath",
+                ".openvr/openvrpaths.vrpath",
+            ] {
+                if let Ok(text) = fs::read_to_string(home.join(config)) {
+                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
+                        if let Some(runtimes) =
+                            value.get("runtime").and_then(|value| value.as_array())
+                        {
+                            for runtime in runtimes.iter().filter_map(|value| value.as_str()) {
+                                for relative in ["lib/linux64", "bin/linux64", "lib/linux32"] {
+                                    candidates.push(
+                                        PathBuf::from(runtime)
+                                            .join(relative)
+                                            .join("libopenvr_api.so"),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            for root in [
+                ".steam/steam",
+                ".steam/root",
+                ".local/share/Steam",
+                ".var/app/com.valvesoftware.Steam/.local/share/Steam",
+            ] {
+                for relative in ["lib/linux64", "bin/linux64"] {
+                    candidates.push(
+                        home.join(root)
+                            .join("steamapps")
+                            .join("common")
+                            .join("SteamVR")
+                            .join(relative)
+                            .join("libopenvr_api.so"),
+                    );
+                }
+            }
+        }
+
+        for path in [
+            "/usr/lib/openvr/libopenvr_api.so",
+            "/usr/lib/x86_64-linux-gnu/libopenvr_api.so",
+            "/opt/steam/steamapps/common/SteamVR/lib/linux64/libopenvr_api.so",
+        ] {
+            candidates.push(PathBuf::from(path));
         }
 
         candidates
@@ -194,8 +305,13 @@ mod platform {
 
     pub fn capture_openvr() -> Result<Vec<u8>, String> {
         let dll = library_candidates().into_iter().next().ok_or_else(|| {
-            "没有找到 SteamVR。请先启动 SteamVR，或把 openvr_api.dll 放在程序目录旁边。"
-                .to_string()
+            if cfg!(windows) {
+                "没有找到 SteamVR。请先启动 SteamVR，或把 openvr_api.dll 放在程序目录旁边。"
+                    .to_string()
+            } else {
+                "没有找到 SteamVR。请先启动 SteamVR，或把 libopenvr_api.so 放在程序目录旁边。"
+                    .to_string()
+            }
         })?;
 
         let batch_dir = crate::paths::screenshots_dir().join(format!("shot-{}", timestamp()));
@@ -214,14 +330,18 @@ mod platform {
                     .get(b"VR_IsRuntimeInstalled\0")
                     .map_err(|_| "SteamVR 组件不完整，请重新安装 SteamVR。".to_string())?;
                 if !is_runtime_installed() {
-                    return Err("SteamVR 还没有运行。请先启动 SteamVR，唤醒头显后重试。".to_string());
+                    return Err(
+                        "SteamVR 还没有运行。请先启动 SteamVR，唤醒头显后重试。".to_string()
+                    );
                 }
 
                 let is_hmd_present: Symbol<FnIsHmdPresent> = library
                     .get(b"VR_IsHmdPresent\0")
                     .map_err(|_| "SteamVR 组件不完整，请重新安装 SteamVR。".to_string())?;
                 if !is_hmd_present() {
-                    return Err("没有检测到头显。请唤醒头显并确认 SteamVR 已就绪后重试。".to_string());
+                    return Err(
+                        "没有检测到头显。请唤醒头显并确认 SteamVR 已就绪后重试。".to_string()
+                    );
                 }
 
                 let init: Symbol<FnInit> = library
@@ -308,14 +428,11 @@ mod platform {
                                     .join(", ")
                             })
                             .unwrap_or_default();
-                        crate::logging::warn(&format!(
-                            "VR 截图超时，目录内容: [{names}]"
-                        ));
+                        crate::logging::warn(&format!("VR 截图超时，目录内容: [{names}]"));
                         "等待 VR 截图超时。请先在头显中打开任意 VR 应用，再试一次。".to_string()
                     })?;
-                    let full = fs::read(&preview_file).map_err(|error| {
-                        format!("无法读取截图结果，请重试（{error}）。")
-                    })?;
+                    let full = fs::read(&preview_file)
+                        .map_err(|error| format!("无法读取截图结果，请重试（{error}）。"))?;
                     match crop_preview(&full) {
                         Ok(cropped) => {
                             crate::logging::info(&format!(
@@ -355,9 +472,50 @@ mod platform {
         CString::new(path.to_string_lossy().as_bytes())
             .map_err(|_| "截图路径包含无效字符，请把程序移动到更简单的目录后重试。".to_string())
     }
+
+    #[cfg(target_os = "linux")]
+    pub fn capture_linux() -> Result<Vec<u8>, String> {
+        let mock = std::env::var("DSH_COMPANION_VR_MOCK")
+            .map(|value| value == "1")
+            .unwrap_or(false);
+        if !mock {
+            return capture_openvr();
+        }
+
+        let full = mock_preview()?;
+        match crop_preview(&full) {
+            Ok(cropped) => Ok(cropped),
+            Err(error) => {
+                crate::logging::warn(&format!("VR 测试截图裁剪失败，返回原始截图: {error}"));
+                Ok(full)
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn mock_preview() -> Result<Vec<u8>, String> {
+        let width = 1024;
+        let height = 1024;
+        let image = image::RgbaImage::from_fn(width, height, |x, y| {
+            let red = (36 + (x * 80 / width)) as u8;
+            let green = (54 + (y * 70 / height)) as u8;
+            let blue = (96 + ((x + y) * 60 / (width + height))) as u8;
+            let line = (y as f64 / height as f64 - 0.572).abs() < 0.002;
+            if line {
+                image::Rgba([210, 72, 82, 255])
+            } else {
+                image::Rgba([red, green, blue, 255])
+            }
+        });
+        let mut encoded = Cursor::new(Vec::new());
+        image
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .map_err(|error| format!("无法生成 VR 测试截图（{error}）。"))?;
+        Ok(encoded.into_inner())
+    }
 }
 
-#[cfg(all(test, windows))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use image::{ImageFormat, Rgba, RgbaImage};
@@ -393,5 +551,18 @@ mod tests {
             .join("vr-capture-test.png");
         std::fs::write(&target, &bytes).expect("write capture");
         println!("captured {} bytes to {}", bytes.len(), target.display());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_mock_preview_is_cropped_like_steamvr() {
+        let full = platform::mock_preview().expect("mock preview");
+        let cropped = crop_preview(&full).expect("crop");
+        let decoded = image::load_from_memory_with_format(&cropped, ImageFormat::Png).unwrap();
+        assert_eq!(decoded.width(), 1024);
+        assert_eq!(
+            decoded.height(),
+            (1024.0 * VR_PREVIEW_TOP_RATIO).round() as u32
+        );
     }
 }

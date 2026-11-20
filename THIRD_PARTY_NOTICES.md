@@ -17,6 +17,18 @@ of the OpenVR SDK by Valve Corporation. It is distributed under the BSD
 - OpenVR API bindings used by this project are loaded through the official
   `openvr_api.dll` at runtime; no SDK source is redistributed.
 
+## Fonts
+
+The interface bundles these font files from Fontsource, all under the SIL Open
+Font License 1.1:
+
+- Inter Variable, Copyright 2016 The Inter Project Authors
+  (<https://github.com/rsms/inter>)
+- Noto Sans SC Variable, Copyright Google Inc.
+  (<https://fonts.google.com/noto/specimen/Noto+Sans+SC>)
+- JetBrains Mono Variable, Copyright 2020 The JetBrains Mono Project Authors
+  (<https://github.com/JetBrains/JetBrainsMono>)
+
 ## Sound
 
 The camera-shutter sound in `capture-countdown.wav` is

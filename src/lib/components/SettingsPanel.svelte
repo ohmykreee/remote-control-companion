@@ -303,6 +303,8 @@
   .settings-panel {
     display: flex;
     flex-direction: column;
+    min-width: 0;
+    width: 100%;
     min-height: 0;
   }
 
@@ -314,6 +316,7 @@
   .settings-cards {
     display: flex;
     flex-direction: column;
+    min-width: 0;
     gap: 14px;
     padding: 0 18px 20px;
   }
@@ -344,6 +347,7 @@
   .setting-section {
     display: flex;
     flex-direction: column;
+    min-width: 0;
     gap: 16px;
     padding: 18px;
   }

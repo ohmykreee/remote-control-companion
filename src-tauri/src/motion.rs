@@ -60,6 +60,19 @@ pub fn apply_to_webview(webview: &tauri::Webview, enabled: bool) {
             }
         });
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        // WebKitGTK has no CDP media emulation. The injected page helper adds
+        // a stylesheet that disables animations and smooth scrolling for the
+        // lifetime of this remote page.
+        let script = format!(
+            "window.__DSH_SET_REDUCED_MOTION__ && window.__DSH_SET_REDUCED_MOTION__({});",
+            if enabled { "true" } else { "false" }
+        );
+        if let Err(error) = webview.eval(&script) {
+            crate::logging::warn(&format!("无法同步减少动态效果: {error}"));
+        }
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     let _ = (webview, enabled);
 }

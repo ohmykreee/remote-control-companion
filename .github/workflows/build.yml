@@ -1,8 +1,11 @@
-# CI/CD for the portable Windows amd64 build.
+# Portable builds for every supported target.
 #
-# Pull requests run the reusable checks workflow only. Pushes to main and manual
-# dispatches also build the portable folder and upload it as an artifact.
-# There is intentionally no release/publish workflow yet.
+# Checks are the shared Ubuntu gate. Packaging runs only for pushes to main and
+# manual dispatches; pull requests stop after the gate. Each target uses a
+# native runner: Windows amd64/arm64 and Linux amd64/arm64 all build against
+# their own system WebView, rather than carrying a cross-compilation sysroot.
+# Every archive is uploaded as an artifact. There is intentionally no release
+# publication workflow yet.
 name: Build
 
 on:
@@ -24,11 +27,38 @@ jobs:
     uses: ./.github/workflows/checks.yml
 
   portable:
-    name: portable (windows-amd64)
+    name: portable (${{ matrix.name }})
     if: github.event_name != 'pull_request'
     needs: checks
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: win-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: DSHRemoteCompanion.exe
+            linux: false
+          - name: win-arm64
+            os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            binary: DSHRemoteCompanion.exe
+            linux: false
+          - name: linux-x64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: DSHRemoteCompanion
+            linux: true
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            binary: DSHRemoteCompanion
+            linux: true
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -51,7 +81,16 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v2.0.0
         with:
           toolchain: 1.99.1
+          target: ${{ matrix.target }}
           cache: false
+
+      - name: Install Tauri Linux dependencies
+        if: matrix.linux
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev patchelf libssl-dev zip unzip
 
       - name: Cache cargo registry
         uses: actions/cache@v6
@@ -59,26 +98,28 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
 
-      - name: Build portable Windows amd64 package
-        run: pnpm run dist
+      - name: Build portable binary
+        run: pnpm tauri build --no-bundle --target ${{ matrix.target }}
+
+      - name: Assemble portable package
+        run: node scripts/assemble-portable.mjs --target ${{ matrix.target }}
 
       - name: Verify portable package
-        shell: pwsh
         run: |
-          $root = "release/DSH-Remote-Companion-win-x64"
-          $zip = "release/DSH-Remote-Companion-win-x64.zip"
-          if (-not (Test-Path "$root/DSHRemoteCompanion.exe")) { throw "missing executable" }
-          if (-not (Test-Path "$root/Data")) { throw "missing Data placeholder" }
-          if (-not (Test-Path $zip)) { throw "missing portable zip" }
-          Get-Item "$root/DSHRemoteCompanion.exe", $zip | Select-Object Name, Length
+          root="release/DSH-Remote-Companion-${{ matrix.name }}"
+          zip="release/DSH-Remote-Companion-${{ matrix.name }}.zip"
+          test -f "$root/${{ matrix.binary }}"
+          test -d "$root/Data"
+          test -f "$zip"
+          ls -lh "$root/${{ matrix.binary }}" "$zip"
 
       - name: Upload portable artifact
         uses: actions/upload-artifact@v7
         with:
-          name: DSH-Remote-Companion-win-x64
-          path: release/DSH-Remote-Companion-win-x64.zip
+          name: DSH-Remote-Companion-${{ matrix.name }}
+          path: release/DSH-Remote-Companion-${{ matrix.name }}.zip
           if-no-files-found: error
           compression-level: 0
           retention-days: 14

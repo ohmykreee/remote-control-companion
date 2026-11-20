@@ -2,15 +2,23 @@
 //! `body[data-theme]` and the `theme-color` meta tag) and forwards it to the
 //! local titlebar so the chrome matches a light or dark remote page.
 
+#[cfg(any(windows, target_os = "linux"))]
 use std::time::Duration;
 
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::AppHandle;
 
+#[cfg(any(windows, target_os = "linux"))]
+use tauri::{Emitter, Manager};
+
+#[cfg(any(windows, target_os = "linux"))]
 use crate::state::AppState;
 
+#[cfg(any(windows, target_os = "linux"))]
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
+#[cfg(any(windows, target_os = "linux"))]
 const QUERY_TIMEOUT: Duration = Duration::from_secs(2);
 
+#[cfg(windows)]
 const THEME_SCRIPT: &str = r#"(() => {
   try {
     const body = document.body;
@@ -64,6 +72,15 @@ pub fn start(app: AppHandle) {
         .name("remote-theme".to_string())
         .spawn(move || watch_theme(app))
         .ok();
+
+    #[cfg(target_os = "linux")]
+    std::thread::Builder::new()
+        .name("remote-theme-linux".to_string())
+        .spawn(move || watch_theme_linux(app))
+        .ok();
+
+    #[cfg(not(any(windows, target_os = "linux")))]
+    let _ = app;
 }
 
 #[cfg(windows)]
@@ -140,6 +157,7 @@ fn query_theme(webview: &tauri::Webview) -> Option<&'static str> {
     receiver.recv_timeout(QUERY_TIMEOUT).ok().flatten()
 }
 
+#[cfg(windows)]
 fn parse_theme(json: &str) -> Option<&'static str> {
     let value: String = serde_json::from_str(json).ok()?;
     match value.as_str() {
@@ -149,7 +167,148 @@ fn parse_theme(json: &str) -> Option<&'static str> {
     }
 }
 
-#[cfg(test)]
+#[cfg(target_os = "linux")]
+const LINUX_STATE_SCRIPT: &str = r#"(() => {
+  try {
+    const html = document.documentElement;
+    const body = document.body;
+    let theme = body && body.dataset ? body.dataset.theme || '' : '';
+    if (theme !== 'light' && theme !== 'dark') {
+      theme = html.classList.contains('light') ? 'light' : html.classList.contains('dark') ? 'dark' : '';
+    }
+    if (!theme) {
+      const meta = document.querySelector('meta[name="theme-color"]');
+      const color = meta && meta.content ? meta.content.trim().toLowerCase() : '';
+      if (color === '#eef2f8') theme = 'light';
+      else if (color === '#151a23') theme = 'dark';
+    }
+    const raw = String(html.getAttribute('lang') || '').toLowerCase();
+    const language = raw.indexOf('zh') === 0 ? 'zh' : raw.indexOf('en') === 0 ? 'en' : '';
+    return JSON.stringify({ theme: theme || 'dark', language: language });
+  } catch (_) {
+    return '{"theme":"dark","language":""}';
+  }
+})()"#;
+
+#[cfg(target_os = "linux")]
+fn watch_theme_linux(app: AppHandle) {
+    let mut last_theme = "dark".to_string();
+    let mut last_language: Option<String> = None;
+    let mut active_label: Option<String> = None;
+    loop {
+        std::thread::sleep(POLL_INTERVAL);
+        let label = {
+            let state = app.state::<AppState>();
+            let runtime = state
+                .runtime
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            runtime.remote_label.clone()
+        };
+
+        let Some(label) = label else {
+            if last_theme != "dark" {
+                let _ = app.emit_to(crate::layout::CHROME_LABEL, "remote-theme", "dark");
+                crate::linux_webview::set_theme(&app, "dark");
+                last_theme = "dark".to_string();
+            }
+            last_language = None;
+            active_label = None;
+            continue;
+        };
+
+        if active_label.as_deref() != Some(label.as_str()) {
+            active_label = Some(label.clone());
+            last_language = None;
+        }
+        let Some(webview) = app.get_webview(&label) else {
+            continue;
+        };
+        let Some(state) = query_linux_state(&webview) else {
+            continue;
+        };
+        if state.theme != last_theme {
+            let _ = app.emit_to(
+                crate::layout::CHROME_LABEL,
+                "remote-theme",
+                state.theme.clone(),
+            );
+            crate::linux_webview::set_theme(&app, &state.theme);
+            last_theme = state.theme;
+        }
+        if let Some(language) = state.language {
+            if last_language.as_deref() != Some(language.as_str()) {
+                let _ = app.emit_to(
+                    crate::layout::CHROME_LABEL,
+                    "remote-language",
+                    language.clone(),
+                );
+                crate::linux_webview::set_language(&app, &language);
+                last_language = Some(language);
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct LinuxRemoteState {
+    theme: String,
+    language: Option<String>,
+}
+
+#[cfg(target_os = "linux")]
+fn query_linux_state(webview: &tauri::Webview) -> Option<LinuxRemoteState> {
+    use std::sync::mpsc;
+
+    use javascriptcore::ValueExt;
+    use webkit2gtk::WebViewExt;
+
+    let (sender, receiver) = mpsc::channel();
+    webview
+        .with_webview(move |platform| {
+            let view = platform.inner();
+            view.evaluate_javascript(
+                LINUX_STATE_SCRIPT,
+                None,
+                None,
+                None::<&webkit2gtk::gio::Cancellable>,
+                move |result| {
+                    let state = match result {
+                        Ok(value) => parse_linux_state(&value.to_str()),
+                        Err(error) => {
+                            crate::logging::warn(&format!("无法读取远控页面状态: {error}"));
+                            None
+                        }
+                    };
+                    let _ = sender.send(state);
+                },
+            );
+        })
+        .ok()?;
+
+    receiver.recv_timeout(QUERY_TIMEOUT).ok().flatten()
+}
+
+#[cfg(target_os = "linux")]
+fn parse_linux_state(raw: &str) -> Option<LinuxRemoteState> {
+    let value: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let theme = match value.get("theme").and_then(|value| value.as_str()) {
+        Some("light") => "light",
+        Some("dark") => "dark",
+        _ => "dark",
+    };
+    let language = value
+        .get("language")
+        .and_then(|value| value.as_str())
+        .filter(|value| *value == "zh" || *value == "en")
+        .map(|value| value.to_string());
+    Some(LinuxRemoteState {
+        theme: theme.to_string(),
+        language,
+    })
+}
+
+#[cfg(all(test, windows))]
 mod tests {
     use super::parse_theme;
 

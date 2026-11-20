@@ -1,8 +1,10 @@
 # AGENTS.md
 
-这个仓库是 **DSH 远控伴侣**，一个便携式 Windows 桌面窗口，用来显示
+这个仓库是 **DSH 远控伴侣**，一个桌面窗口，用来显示
 [`dsh-remote-control`](https://github.com/ohmykreee/dsh-remote-control) 的远控页面，并补充麦克风选择、
-安全环境和 VR 截图能力。面向用户的说明在 [README.md](README.md)。
+VR 截图和安全的远控环境。面向用户的说明在 [README.md](README.md)。
+
+支持 Windows 10/11 与 Linux（优先 KDE Plasma / GNOME）。
 
 ## 概览
 
@@ -37,6 +39,7 @@ src-tauri/src/
   backdrop.rs             用 WebView2 自身截取远控画面，作为菜单模糊背景
   motion.rs               把减少动态效果同步给远控页面的 prefers-reduced-motion
   language.rs             通过 WebView2 消息接收远控页面语言
+  linux_webview.rs        Linux 原生应用栏/工具栏，以及 GTK 侧边栏布局
   window_behavior.rs      窗口透明度、全局老板键、靠边隐藏滑动
   theme.rs                读取远控页面亮/暗主题并同步标题栏
   settings.rs             Data/settings.json
@@ -58,18 +61,21 @@ pnpm install
 pnpm dev                 # 只起 Vite
 pnpm dev:tauri           # 开发桌面应用
 pnpm check               # svelte-check，必须零 warning（或明确记录）
-pnpm test                # frontend check/build + Windows amd64 测试编译与执行
+pnpm test                # frontend check/build + 原生平台 Rust 测试
 pnpm build               # 前端生产构建
 pnpm run build:rust      # tauri build --no-bundle
-pnpm run dist            # 构建并组装 release/DSH-Remote-Companion-win-x64
+pnpm run dist            # 构建并组装当前平台的便携包
+pnpm tauri build --no-bundle --target <triple>  # CI 的单目标构建
+node scripts/assemble-portable.mjs --target <triple>
 node test/mock-remote.mjs
 ```
 
-Rust 测试（只针对 Windows amd64；项目本身只支持 Windows）：
+Rust 测试在 Linux/macOS/Windows 的当前平台运行：
 
 ```bash
-pnpm run test:rust:compile   # cargo test --no-run --target x86_64-pc-windows-msvc
-pnpm run test:rust           # 执行 Windows amd64 测试，单线程
+pnpm run test:rust:compile   # cargo test --no-run
+pnpm run test:rust           # cargo test -- --test-threads=1
+pnpm run test:rust:windows   # 需要显式 Windows amd64 时使用
 ```
 
 需要 SteamVR 和已唤醒头显的截图冒烟测试（ignored by default）：
@@ -171,6 +177,9 @@ Tauri 命令里直接调用 `Window::add_child` / `Webview::set_size` 会在某�
 
 - 全部本地界面文案在 `src/lib/copy.svelte.ts`，**中文一个对象、英文一个对象**，由 `copy` Proxy 按当前语言返回；
   `setCopyLocale` 维护当前语言。组件中不要新增硬编码中文/英文，两个对象的键必须保持一致。
+- 界面字体统一来自 `@fontsource-variable`（Inter、Noto Sans SC、JetBrains Mono），在 `src/main.ts`
+  导入，`app.css` 的 `--font-sans` / `--font-mono` 只引用这些内部字体，不添加系统字体族。
+  新增字体也必须用 Fontsource 打包进 `dist`，不要依赖系统安装或外部 CDN。
 - App 在设置加载、用户选择语言、远控页面报告语言时更新文案；设置字段 `language` 只接受 `zh` / `en`，
   下次启动由 `get_bootstrap` 恢复。连接页标题栏显示语言菜单，进入远控后隐藏。
 - 远控页面语言是连接后的权威值：`remote_bootstrap.js` 观察 `<html lang>` 并通过
@@ -332,20 +341,52 @@ pnpm dlx shadcn-svelte@latest add <component> --overwrite --yes
 pnpm run dist
 ```
 
-产物在 `release/DSH-Remote-Companion-win-x64/`，同时会生成 zip。`scripts/assemble-portable.mjs`
-复制 exe、准备 `Data/README.txt`、从构建机 SteamVR 复制 `openvr_api.dll`（没有则运行时自动查找），
-并带上 README、LICENSE、THIRD_PARTY_NOTICES。
+Windows 产物在 `release/DSH-Remote-Companion-win-x64/`，Linux 为
+`release/DSH-Remote-Companion-linux-x64/`，同时生成同名 zip。`scripts/assemble-portable.mjs`
+接受 `--target <triple>`，复制对应 `src-tauri/target/<triple>/release` 的二进制、准备
+`Data/README.txt`，Windows 上还会从构建机 SteamVR 复制 `openvr_api.dll`，并带上 README、
+LICENSE、THIRD_PARTY_NOTICES。
+
+## Linux 平台差异（当前实现）
+
+- Linux 使用 WebKitGTK。Tauri 的 Linux 多 WebView 容器是 `GtkBox`，子 WebView 的绝对 bounds
+  在那里不生效；因此 Linux **不使用** 与 Windows 相同的“44px chrome + 绝对定位 remote”行为。
+- `linux_webview.rs` 在窗口里创建原生 GTK 顶栏：44px 应用栏（标题和窗口按钮）+ 38px 工具栏
+  （设置 / 返回 / 刷新 / 关于 / 语言）。Linux 的连接页、远控页和设置页都使用这套顶栏；本地 chrome
+  WebView 在远控时隐藏，远控 WebView 在工具栏下方占满剩余窗口；打开设置/关于时显示全窗口本地 chrome。
+- 不要在 Linux 上尝试用 `set_position` / `set_size` 摆第二个 WebView；上游 Tauri 会忽略这些 bounds。
+  也不要把它重新塞进 `GtkFixed` 或 reparent WebKit 控件，这会在 GTK/Wayland 下崩溃。
+- 原生栏按钮通过 `linux-open-settings`、`linux-back-home`、`linux-refresh` 事件驱动前端，语言由
+  `set_language` 更新；主题由 `set_theme` 更新。事件名和按钮文案必须与 `App.svelte` 的监听保持一致。
+- Linux 的主题/语言轮询在 `theme.rs` 中通过 WebKitGTK `evaluate_javascript` 完成；不要依赖 WebView2
+  的 `ExecuteScript`。`remote-theme` / `remote-language` 事件仍发给 chrome。
+- Linux 的减少动态效果由 `remote_bootstrap.js` 注入样式；Windows 仍使用 CDP 的
+  `Emulation.setEmulatedMedia`。
+- Linux VR 截图使用 OpenVR 的 `libopenvr_api.so`：程序目录、`$HOME` 下的 SteamVR 安装和
+  `openvrpaths.vrpath` 都会被搜索；`DSH_COMPANION_OPENVR_PATH` 可指定测试库。
+  `DSH_COMPANION_VR_MOCK=1` 返回确定性预览，只用于无头测试，不应作为生产截图。
+- 安全上下文豁免仅 Windows 有效；Linux 请用 `https://`。覆盖层背景截图在 Linux 暂时降级为纯色背景。
+- 窗口靠边隐藏使用 Tauri 的鼠标/窗口 API；KDE/GNOME Wayland 可能拒绝移动窗口，X11 会话可完整工作。
+  全局老板键由 `tauri-plugin-global-shortcut` 提供，Wayland 下可能不可用。
 
 ## CI/CD
 
-GitHub Actions 只在 **windows-latest** 上运行，目标固定为 Windows amd64；当前不做 Ubuntu 交叉编译。
+所有质量检查都在 **ubuntu-latest** 上运行；打包使用原生架构 runner，不做跨架构 sysroot。
 
-- `.github/workflows/checks.yml`（可复用）：`pnpm check`、`pnpm build`、编译并执行 Windows amd64
-  Rust 测试（`pnpm run test:rust:compile` + `pnpm run test:rust`）。
+- `.github/workflows/checks.yml`（可复用，Ubuntu）：
+  - `pnpm check`、`pnpm build`
+  - `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`
+  - `pnpm run test:rust:compile` + `pnpm run test:rust`（Linux 原生测试）
 - `.github/workflows/build.yml`：
   - `pull_request`：只跑 checks，不打包。
-  - `push` 到 `main` / `workflow_dispatch`：先通过 checks，再 `pnpm run dist` 生成
-    `release/DSH-Remote-Companion-win-x64.zip`，并上传 artifact `DSH-Remote-Companion-win-x64`。
+  - `push` 到 `main` / `workflow_dispatch`：checks 通过后并行构建：
+    - `windows-latest` → `x86_64-pc-windows-msvc`
+    - `windows-11-arm` → `aarch64-pc-windows-msvc`
+    - `ubuntu-latest` → `x86_64-unknown-linux-gnu`
+    - `ubuntu-24.04-arm` → `aarch64-unknown-linux-gnu`
+  - 每个目标运行 `pnpm tauri build --no-bundle --target <triple>`，再由
+    `scripts/assemble-portable.mjs --target <triple>` 生成
+    `release/DSH-Remote-Companion-<platform>-<arch>.zip` 并上传 artifact。
 - 暂未添加 publish/release 工作流；不要在没有相应要求时创建。
 - CI 产物位于 Actions 的 artifact 中，保留 14 天。
 

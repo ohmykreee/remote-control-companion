@@ -50,6 +50,10 @@ class CompanionApp {
       this.overlay = boot.layout.overlay;
       this.secureContextApplied = boot.layout.secure_context_applied;
       this.ready = true;
+      if (boot.test_open_url) {
+        this.address = boot.test_open_url;
+        void this.connect();
+      }
     } catch {
       this.fatalError = copy.app.initFailed;
       this.ready = true;

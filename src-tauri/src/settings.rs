@@ -70,9 +70,7 @@ impl Settings {
         if !self.replace_clipboard_with_vr {
             self.delay_vr_capture = false;
         }
-        self.window_opacity = self
-            .window_opacity
-            .clamp(MIN_WINDOW_OPACITY, 100);
+        self.window_opacity = self.window_opacity.clamp(MIN_WINDOW_OPACITY, 100);
         self.boss_key = self.boss_key.trim().to_string();
         if self.boss_key.len() > 64 {
             self.boss_key.truncate(64);
@@ -81,7 +79,8 @@ impl Settings {
             "en".to_string()
         } else {
             "zh".to_string()
-        };        let mut edges = Vec::new();
+        };
+        let mut edges = Vec::new();
         for edge in &self.edge_autohide_edges {
             let normalized = edge.trim().to_ascii_lowercase();
             if EDGE_SIDES.contains(&normalized.as_str()) && !edges.contains(&normalized) {
@@ -101,17 +100,13 @@ pub fn load() -> Settings {
                 settings
             }
             Err(error) => {
-                crate::logging::warn(&format!(
-                    "settings.json 无法读取，使用默认设置: {error}"
-                ));
+                crate::logging::warn(&format!("settings.json 无法读取，使用默认设置: {error}"));
                 Settings::default()
             }
         },
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Settings::default(),
         Err(error) => {
-            crate::logging::warn(&format!(
-                "settings.json 读取失败，使用默认设置: {error}"
-            ));
+            crate::logging::warn(&format!("settings.json 读取失败，使用默认设置: {error}"));
             Settings::default()
         }
     }
@@ -127,6 +122,23 @@ pub fn save(settings: &Settings) -> Result<(), String> {
     write_atomic(&path, settings)
 }
 
+fn write_atomic(path: &Path, settings: &Settings) -> Result<(), String> {
+    let text = serde_json::to_string_pretty(settings)
+        .map_err(|error| format!("设置内容无法保存，请重试（{error}）。"))?;
+    let temp = path.with_extension("json.tmp");
+    fs::write(&temp, text)
+        .map_err(|error| format!("设置未能写入 Data 目录，请检查写入权限后重试（{error}）。"))?;
+    if fs::rename(&temp, path).is_err() {
+        // Windows can refuse to replace an existing file if it is momentarily
+        // open. Removing first keeps the portable contract without changing
+        // where state lives.
+        let _ = fs::remove_file(path);
+        fs::rename(&temp, path)
+            .map_err(|error| format!("设置未能保存，请检查 Data 目录权限后重试（{error}）。"))?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,11 +147,7 @@ mod tests {
     fn sanitize_clamps_opacity_and_normalizes_edges() {
         let mut settings = Settings {
             window_opacity: 0,
-            edge_autohide_edges: vec![
-                "LEFT".to_string(),
-                "left".to_string(),
-                "center".to_string(),
-            ],
+            edge_autohide_edges: vec!["LEFT".to_string(), "left".to_string(), "center".to_string()],
             ..Settings::default()
         };
         settings.sanitize();
@@ -156,23 +164,4 @@ mod tests {
         settings.sanitize();
         assert!(settings.edge_autohide_edges.is_empty());
     }
-}
-
-fn write_atomic(path: &Path, settings: &Settings) -> Result<(), String> {
-    let text = serde_json::to_string_pretty(settings)
-        .map_err(|error| format!("设置内容无法保存，请重试（{error}）。"))?;
-    let temp = path.with_extension("json.tmp");
-    fs::write(&temp, text).map_err(|error| {
-        format!("设置未能写入 Data 目录，请检查写入权限后重试（{error}）。")
-    })?;
-    if fs::rename(&temp, path).is_err() {
-        // Windows can refuse to replace an existing file if it is momentarily
-        // open. Removing first keeps the portable contract without changing
-        // where state lives.
-        let _ = fs::remove_file(path);
-        fs::rename(&temp, path).map_err(|error| {
-            format!("设置未能保存，请检查 Data 目录权限后重试（{error}）。")
-        })?;
-    }
-    Ok(())
 }

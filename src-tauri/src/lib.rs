@@ -2,8 +2,10 @@ mod backdrop;
 mod bridge;
 mod capture;
 mod commands;
-mod layout;
 mod language;
+mod layout;
+#[cfg(target_os = "linux")]
+mod linux_webview;
 mod logging;
 mod motion;
 mod paths;
@@ -80,6 +82,8 @@ pub fn run() {
             let loaded = settings::load();
             let initial_opacity = loaded.window_opacity;
             let initial_boss_key = loaded.boss_key.clone();
+            #[cfg(target_os = "linux")]
+            let initial_language = loaded.language.clone();
 
             app.manage(AppState {
                 runtime: Mutex::new(RuntimeState::new(loaded)),
@@ -89,10 +93,31 @@ pub fn run() {
 
             bridge::start(app.handle().clone(), listener);
 
+            #[cfg(target_os = "linux")]
+            let (initial_width, initial_height, min_width, min_height) = {
+                let monitor = app.primary_monitor().ok().flatten();
+                let (logical_width, logical_height) = monitor
+                    .as_ref()
+                    .map(|monitor| {
+                        let scale = monitor.scale_factor().max(1.0);
+                        (
+                            monitor.size().width as f64 / scale,
+                            monitor.size().height as f64 / scale,
+                        )
+                    })
+                    .unwrap_or((960.0, 600.0));
+                let width = 960.0_f64.min((logical_width - 160.0).max(480.0));
+                let height = 600.0_f64.min((logical_height - 100.0).max(320.0));
+                (width, height, width.min(800.0), height.min(500.0))
+            };
+            #[cfg(not(target_os = "linux"))]
+            let (initial_width, initial_height, min_width, min_height) =
+                (960.0, 600.0, 800.0, 500.0);
+
             let window = WindowBuilder::new(app, layout::WINDOW_LABEL)
                 .title("DSH 远控伴侣")
-                .inner_size(960.0, 600.0)
-                .min_inner_size(800.0, 500.0)
+                .inner_size(initial_width, initial_height)
+                .min_inner_size(min_width, min_height)
                 .decorations(false)
                 .resizable(true)
                 .shadow(true)
@@ -101,8 +126,13 @@ pub fn run() {
                 .background_color(tauri::window::Color(11, 15, 22, 255))
                 .build()?;
 
-            layout::create_chrome_webview(app.handle())
-                .map_err(setup_error)?;
+            #[cfg(target_os = "linux")]
+            {
+                linux_webview::prepare(&window, app.handle().clone());
+                linux_webview::set_language(app.handle(), &initial_language);
+            }
+
+            layout::create_chrome_webview(app.handle()).map_err(setup_error)?;
 
             if let Err(error) = window_behavior::apply_opacity(&window, initial_opacity) {
                 logging::warn(&format!("无法应用窗口透明度: {error}"));
@@ -110,7 +140,10 @@ pub fn run() {
 
             let handle = app.handle().clone();
             window.on_window_event(move |event| {
-                if matches!(event, WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. }) {
+                if matches!(
+                    event,
+                    WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. }
+                ) {
                     let app = handle.clone();
                     let runtime = app
                         .state::<AppState>()
@@ -127,6 +160,7 @@ pub fn run() {
             window.show()?;
             window_behavior::start_autohide(app.handle().clone());
             theme::start(app.handle().clone());
+
             if !initial_boss_key.is_empty() {
                 let app_handle = app.handle().clone();
                 std::thread::spawn(move || {
