@@ -157,9 +157,15 @@ const zipPath = path.join(root, 'release', `${distName}.zip`);
 fs.rmSync(zipPath, { force: true });
 try {
   if (platform === 'win') {
-    // Windows' tar.exe is bsdtar and uses forward slashes in zip entries.
+    // Use Windows' bundled bsdtar explicitly. GitHub Actions runs this script
+    // from Git Bash, where plain `tar` resolves to GNU tar, which does not
+    // understand bsdtar's `-a` auto-archive flag.
+    const windowsTar = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe');
+    if (!fs.existsSync(windowsTar)) {
+      throw new Error(`Windows tar not found at ${windowsTar}`);
+    }
     execFileSync(
-      'tar',
+      windowsTar,
       ['-a', '-c', '-f', zipPath, '-C', path.dirname(distDir), distName],
       { stdio: 'inherit' },
     );
@@ -170,7 +176,12 @@ try {
     });
   }
 } catch (error) {
-  console.warn(`[assemble] archive failed; the portable folder is still ready: ${error.message}`);
+  console.error(`[assemble] archive failed: ${error.message}`);
+  process.exit(1);
+}
+if (!fs.existsSync(zipPath)) {
+  console.error(`[assemble] archive was not created: ${zipPath}`);
+  process.exit(1);
 }
 
 console.log(`[assemble] ${distName} -> ${distDir}`);

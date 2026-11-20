@@ -381,9 +381,7 @@ LICENSE、THIRD_PARTY_NOTICES。
   - `pull_request`：只跑 checks，不打包。
   - `push` 到 `main` / `workflow_dispatch`：checks 通过后并行构建：
     - `windows-latest` → `x86_64-pc-windows-msvc`
-    - `windows-11-arm` → `aarch64-pc-windows-msvc`
     - `ubuntu-latest` → `x86_64-unknown-linux-gnu`
-    - `ubuntu-24.04-arm` → `aarch64-unknown-linux-gnu`
   - 每个目标运行 `pnpm tauri build --no-bundle --target <triple>`，再由
     `scripts/assemble-portable.mjs --target <triple>` 生成
     `release/DSH-Remote-Companion-<platform>-<arch>.zip` 并上传 artifact。

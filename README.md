@@ -22,11 +22,11 @@
 3. 第一次启动会创建 `Data` 文件夹，设置与数据都保存在同级的 `Data` 中；移动程序时请连整个文件夹一起复制。
 4. 使用 VR 截图时需要 SteamVR 正在运行，并先在头显中打开任意 VR 应用。
 
-支持 Windows 10/11 x64 和 arm64。系统需要 Microsoft Edge WebView2 运行时；Windows 11 通常已自带。
+支持 Windows 10/11 x64。系统需要 Microsoft Edge WebView2 运行时；Windows 11 通常已自带。
 
 ### Linux
 
-1. 下载 `DSH-Remote-Companion-linux-x64.zip` 或 `DSH-Remote-Companion-linux-arm64.zip` 并解压到可写目录。
+1. 下载 `DSH-Remote-Companion-linux-x64.zip` 并解压到可写目录。
 2. 给程序执行权限：`chmod +x DSHRemoteCompanion`。
 3. 运行 `./DSHRemoteCompanion`。首次启动会在程序旁创建 `Data` 文件夹。
 

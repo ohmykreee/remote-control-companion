@@ -1,11 +1,11 @@
-# Portable builds for every supported target.
+# Portable builds for the supported x64 targets.
 #
 # Checks are the shared Ubuntu gate. Packaging runs only for pushes to main and
 # manual dispatches; pull requests stop after the gate. Each target uses a
-# native runner: Windows amd64/arm64 and Linux amd64/arm64 all build against
-# their own system WebView, rather than carrying a cross-compilation sysroot.
-# Every archive is uploaded as an artifact. There is intentionally no release
-# publication workflow yet.
+# native runner: Windows x64 and Linux x64 build against their own system
+# WebView, rather than carrying a cross-compilation sysroot. Every archive is
+# uploaded as an artifact. There is intentionally no release publication
+# workflow yet.
 name: Build
 
 on:
@@ -39,19 +39,9 @@ jobs:
             target: x86_64-pc-windows-msvc
             binary: DSHRemoteCompanion.exe
             linux: false
-          - name: win-arm64
-            os: windows-11-arm
-            target: aarch64-pc-windows-msvc
-            binary: DSHRemoteCompanion.exe
-            linux: false
           - name: linux-x64
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            binary: DSHRemoteCompanion
-            linux: true
-          - name: linux-arm64
-            os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
             binary: DSHRemoteCompanion
             linux: true
     runs-on: ${{ matrix.os }}
