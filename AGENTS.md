@@ -192,6 +192,9 @@ Tauri 命令里直接调用 `Window::add_child` / `Webview::set_size` 会在某�
 
 ### 远端权限与麦克风
 
+- 远端 WebView 的 User-Agent 从本地 chrome WebView **实时读取**，再追加
+  `RC-Companion/<版本>`；不要写死 UA。这样 `dsh-remote-control` 的原始 UA 悬停内容仍包含真实的
+  WebKit/WebView2 平台与引擎版本。
 - 远端 WebView 打开剪贴板访问，并将 WebView2 权限请求静默设为 `Allow`。
 - `remote_bootstrap.js` 注入到所有文档，但检查 `window.top === window` 与 `location.origin`；只在目标页顶层生效。
 - 若设置里保存了麦克风 label，会包装 `navigator.mediaDevices.getUserMedia`：在远端页面自己的

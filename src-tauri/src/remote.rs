@@ -1,5 +1,6 @@
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use tauri::Manager;
 
 use crate::settings::Settings;
 use crate::state::BridgeInfo;
@@ -25,6 +26,81 @@ pub fn normalize_remote_url(raw: &str) -> Result<tauri::Url, String> {
         return Err("远控地址缺少主机名，请检查后重试。".to_string());
     }
     Ok(url)
+}
+
+/// Append the companion marker to the WebView's actual default User-Agent.
+/// The base string is read from the already-created local chrome WebView, so
+/// engine versions and platform tokens stay exactly as the runtime reports
+/// them instead of being hard-coded here.
+pub fn companion_user_agent(app: &tauri::AppHandle) -> Option<String> {
+    let base = read_chrome_user_agent(app)?;
+    let base = base.trim();
+    if base.is_empty() {
+        return None;
+    }
+    Some(append_companion(base))
+}
+
+fn append_companion(base: &str) -> String {
+    if base.contains("RC-Companion") {
+        return base.to_string();
+    }
+    format!("{base} RC-Companion/{}", env!("CARGO_PKG_VERSION"))
+}
+
+#[cfg(target_os = "linux")]
+fn read_chrome_user_agent(app: &tauri::AppHandle) -> Option<String> {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use webkit2gtk::{SettingsExt, WebViewExt};
+
+    let webview = app.get_webview(crate::layout::CHROME_LABEL)?;
+    let (sender, receiver) = mpsc::channel();
+    webview
+        .with_webview(move |platform| {
+            let value = WebViewExt::settings(&platform.inner())
+                .and_then(|settings| settings.user_agent())
+                .map(|value| value.to_string());
+            let _ = sender.send(value);
+        })
+        .ok()?;
+    receiver.recv_timeout(Duration::from_secs(2)).ok().flatten()
+}
+
+#[cfg(windows)]
+fn read_chrome_user_agent(app: &tauri::AppHandle) -> Option<String> {
+    use std::ffi::c_void;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings2;
+    use windows::core::{Interface as _, PWSTR};
+    use windows::Win32::System::Com::CoTaskMemFree;
+
+    let webview = app.get_webview(crate::layout::CHROME_LABEL)?;
+    let (sender, receiver) = mpsc::channel();
+    webview
+        .with_webview(move |platform| {
+            let value = (|| -> Option<String> {
+                let core = unsafe { platform.controller().CoreWebView2().ok()? };
+                let settings = unsafe { core.Settings().ok()? };
+                let settings: ICoreWebView2Settings2 = settings.cast().ok()?;
+                let mut raw = PWSTR::null();
+                unsafe { settings.UserAgent(&mut raw).ok()? };
+                let value = unsafe { raw.to_string().ok() };
+                unsafe { CoTaskMemFree(Some(raw.0 as *const c_void)) };
+                value
+            })();
+            let _ = sender.send(value);
+        })
+        .ok()?;
+    receiver.recv_timeout(Duration::from_secs(2)).ok().flatten()
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+fn read_chrome_user_agent(_app: &tauri::AppHandle) -> Option<String> {
+    None
 }
 
 /// True for a plain-HTTP URL whose host is a private/loopback IP address.
@@ -162,6 +238,15 @@ mod tests {
     #[test]
     fn rejects_non_web_schemes() {
         assert!(normalize_remote_url("file:///C:/secret.txt").is_err());
+    }
+
+    #[test]
+    fn companion_marker_keeps_original_ua_and_is_not_duplicated() {
+        let base = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
+        let ua = append_companion(base);
+        assert!(ua.starts_with(base));
+        assert!(ua.contains("RC-Companion/"));
+        assert_eq!(append_companion(&ua), ua);
     }
 
     #[test]

@@ -152,12 +152,22 @@ pub fn create_or_replace_remote(
         .map_err(|error| format!("无法创建远控页面缓存，请检查 Data 目录权限（{error}）。"))?;
 
     let script = remote::injection_script(settings, &page_url, bridge);
+    let user_agent = remote::companion_user_agent(app);
+    if let Some(user_agent) = &user_agent {
+        logging::info(&format!("远端 User-Agent: {user_agent}"));
+    } else {
+        logging::warn("无法读取 WebView 默认 User-Agent，未能附加 RC-Companion 标记");
+    }
     let builder = WebviewBuilder::new(&label, WebviewUrl::External(page_url.clone()))
         .data_directory(data_dir)
         .enable_clipboard_access()
         .on_permission_request(|_, _| PermissionResponse::Allow)
         .initialization_script(script)
         .disable_drag_drop_handler();
+    let builder = match user_agent {
+        Some(user_agent) => builder.user_agent(&user_agent),
+        None => builder,
+    };
 
     #[cfg(windows)]
     let builder = builder.additional_browser_args(&args);
