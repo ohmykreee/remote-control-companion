@@ -151,7 +151,7 @@ pub fn create_or_replace_remote(
     fs::create_dir_all(&data_dir)
         .map_err(|error| format!("无法创建远控页面缓存，请检查 Data 目录权限（{error}）。"))?;
 
-    let script = remote::injection_script(settings, &page_url, bridge);
+    let script = remote::state_script(settings, &page_url);
     let user_agent = remote::companion_user_agent(app);
     if let Some(user_agent) = &user_agent {
         logging::info(&format!("远端 User-Agent: {user_agent}"));
@@ -164,6 +164,13 @@ pub fn create_or_replace_remote(
         .on_permission_request(|_, _| PermissionResponse::Allow)
         .initialization_script(script)
         .disable_drag_drop_handler();
+    // The screenshot API is the only conditional injection; every state
+    // report lives in the single bootstrap script above.
+    let builder = if settings.replace_clipboard_with_vr {
+        builder.initialization_script(remote::vr_api_script(bridge))
+    } else {
+        builder
+    };
     let builder = match user_agent {
         Some(user_agent) => builder.user_agent(&user_agent),
         None => builder,

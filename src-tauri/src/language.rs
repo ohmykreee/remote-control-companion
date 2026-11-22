@@ -1,6 +1,7 @@
-//! Receives small language/theme hints from the remote page through the
-//! native WebView message channel. This avoids granting the remote page access
-//! to the Tauri command surface just to report its language.
+//! Receives the single consolidated state report (language, theme and VRChat
+//! status) from the remote page through the native WebView message channel.
+//! This avoids granting the remote page access to the Tauri command surface
+//! just to report its own state.
 
 use tauri::{AppHandle, Emitter};
 
@@ -79,35 +80,42 @@ fn handle_message(app: &AppHandle, text: &str) {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
         return;
     };
-    let kind = value
-        .get("type")
-        .and_then(|value| value.as_str())
-        .unwrap_or_default();
-
-    match kind {
-        "companion-language" => {
-            let language = value
-                .get("language")
-                .and_then(|value| value.as_str())
-                .unwrap_or_default();
-            let language = if language.eq_ignore_ascii_case("en") {
-                "en"
-            } else if language.eq_ignore_ascii_case("zh") {
-                "zh"
-            } else {
-                return;
-            };
-            let _ = app.emit_to(crate::layout::CHROME_LABEL, "remote-language", language);
-        }
-        "companion-theme" => {
-            let theme = value
-                .get("theme")
-                .and_then(|value| value.as_str())
-                .unwrap_or_default();
-            if theme == "light" || theme == "dark" {
-                let _ = app.emit_to(crate::layout::CHROME_LABEL, "remote-theme", theme);
-            }
-        }
+    match value.get("type").and_then(|value| value.as_str()) {
+        Some("companion-ui") => handle_ui_message(app, &value),
+        Some("companion-status") => crate::vrchat::handle_status_message(app, &value),
         _ => {}
     }
+}
+
+fn handle_ui_message(app: &AppHandle, value: &serde_json::Value) {
+    if let Some(language) = value.get("language").and_then(|value| value.as_str()) {
+        let language = if language.eq_ignore_ascii_case("en") {
+            Some("en")
+        } else if language.eq_ignore_ascii_case("zh") {
+            Some("zh")
+        } else {
+            None
+        };
+        if let Some(language) = language {
+            let _ = app.emit_to(crate::layout::CHROME_LABEL, "remote-language", language);
+            #[cfg(target_os = "linux")]
+            crate::linux_webview::set_language(app, language);
+        }
+    }
+
+    if let Some(theme) = value.get("theme").and_then(|value| value.as_str()) {
+        if theme == "light" || theme == "dark" {
+            let _ = app.emit_to(crate::layout::CHROME_LABEL, "remote-theme", theme);
+            #[cfg(target_os = "linux")]
+            crate::linux_webview::set_theme(app, theme);
+        }
+    }
+}
+
+/// Clear the remote-page theme when the page is closed. Without this the
+/// titlebar could keep a light theme after returning to the connection page.
+pub fn reset_theme(app: &AppHandle) {
+    let _ = app.emit_to(crate::layout::CHROME_LABEL, "remote-theme", "dark");
+    #[cfg(target_os = "linux")]
+    crate::linux_webview::set_theme(app, "dark");
 }

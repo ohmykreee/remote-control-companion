@@ -4,10 +4,12 @@
   import { Input } from '$lib/components/ui/input/index.js';
   import { Button } from '$lib/components/ui/button/index.js';
   import { Checkbox } from '$lib/components/ui/checkbox/index.js';
+  import { Textarea } from '$lib/components/ui/textarea/index.js';
+  import * as ToggleGroup from '$lib/components/ui/toggle-group/index.js';
   import MicrophonePanel from './MicrophonePanel.svelte';
   import { companion } from '$lib/state.svelte';
   import { copy } from '$lib/copy.svelte';
-  import { api, type EdgeSide } from '$lib/api';
+  import { api, type EdgeSide, type VrchatOscMode } from '$lib/api';
 
   let { dialog = false }: { dialog?: boolean } = $props();
 
@@ -15,8 +17,21 @@
   let bossRecording = $state(false);
   let bossError = $state('');
   let bossInput = $state<HTMLInputElement | null>(null);
+  let oscHost = $state(companion.settings.vrchat_osc_host);
+  let oscPort = $state<number | undefined>(companion.settings.vrchat_osc_port);
+  let oscCustomText = $state(companion.settings.vrchat_osc_custom_text);
+  let customSaveTimer: ReturnType<typeof setTimeout> | null = null;
 
   const edgeOptions: EdgeSide[] = ['top', 'left', 'right'];
+  const oscModes: VrchatOscMode[] = ['clock', 'music', 'system', 'agent', 'custom'];
+
+  function oscModeLabel(mode: VrchatOscMode): string {
+    if (mode === 'music') return copy.settings.vrchat.contentMusic;
+    if (mode === 'system') return copy.settings.vrchat.contentSystem;
+    if (mode === 'agent') return copy.settings.vrchat.contentAgent;
+    if (mode === 'custom') return copy.settings.vrchat.contentCustom;
+    return copy.settings.vrchat.contentClock;
+  }
 
   function edgeLabel(edge: EdgeSide): string {
     if (edge === 'top') return copy.settings.window.edgeTop;
@@ -125,6 +140,64 @@
       edge_autohide_edges: edgeOptions.filter((value) => next.has(value)),
     });
   }
+
+  function setVrchatEnabled(checked: boolean): void {
+    void companion.save({ vrchat_osc_enabled: checked });
+  }
+
+  function commitOscHost(): void {
+    const host = oscHost.trim() || '127.0.0.1';
+    oscHost = host;
+    if (host !== companion.settings.vrchat_osc_host) {
+      void companion.save({ vrchat_osc_host: host });
+    }
+  }
+
+  function commitOscPort(): void {
+    const value = Number(oscPort);
+    const port =
+      Number.isFinite(value) && value >= 1 && value <= 65535 ? Math.round(value) : 9000;
+    oscPort = port;
+    if (port !== companion.settings.vrchat_osc_port) {
+      void companion.save({ vrchat_osc_port: port });
+    }
+  }
+
+  function setVrchatMode(value: string): void {
+    if (!oscModes.includes(value as VrchatOscMode)) return;
+    void companion.save({ vrchat_osc_mode: value as VrchatOscMode });
+  }
+
+  function limitCustomText(value: string): string {
+    const lines = value.replace(/\r\n?/g, '\n').split('\n').slice(0, 4);
+    const text = lines.join('\n');
+    return text.length > 108 ? text.slice(0, 108) : text;
+  }
+
+  function scheduleCustomText(value: string): void {
+    oscCustomText = limitCustomText(value);
+    if (customSaveTimer) clearTimeout(customSaveTimer);
+    customSaveTimer = setTimeout(() => {
+      customSaveTimer = null;
+      void companion.save({ vrchat_osc_custom_text: oscCustomText });
+    }, 450);
+  }
+
+  function commitCustomText(): void {
+    oscCustomText = limitCustomText(oscCustomText);
+    if (customSaveTimer) {
+      clearTimeout(customSaveTimer);
+      customSaveTimer = null;
+    }
+    if (oscCustomText !== companion.settings.vrchat_osc_custom_text) {
+      void companion.save({ vrchat_osc_custom_text: oscCustomText });
+    }
+  }
+
+  $effect(() => () => {
+    if (customSaveTimer) clearTimeout(customSaveTimer);
+    customSaveTimer = null;
+  });
 </script>
 
 <div class="settings-panel" class:dialog>
@@ -311,6 +384,107 @@
     </div>
 
     <p class="section-note">{copy.settings.security.note}</p>
+  </section>
+
+    <section class="setting-section settings-card">
+      <div class="section-heading">
+        <h3>{copy.settings.vrchat.title}</h3>
+        <p>{copy.settings.vrchat.description}</p>
+      </div>
+
+    <div class="toggle-row">
+      <div class="toggle-copy">
+        <span class="toggle-title">{copy.settings.vrchat.enable}</span>
+        <span class="toggle-hint">{copy.settings.vrchat.enableHint}</span>
+      </div>
+      <Switch
+        checked={companion.settings.vrchat_osc_enabled}
+        onCheckedChange={setVrchatEnabled}
+        aria-label={copy.settings.vrchat.enable}
+      />
+    </div>
+
+    <div class="osc-address-row">
+      <div class="field-block">
+        <span class="field-title">{copy.settings.vrchat.host}</span>
+        <Input
+          class="osc-input"
+          bind:value={oscHost}
+          spellcheck={false}
+          autocomplete="off"
+          aria-label={copy.settings.vrchat.host}
+          onblur={commitOscHost}
+          onkeydown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              commitOscHost();
+            }
+          }}
+        />
+        <p class="field-hint">{copy.settings.vrchat.hostHint}</p>
+      </div>
+
+      <div class="field-block">
+        <span class="field-title">{copy.settings.vrchat.port}</span>
+        <Input
+          class="osc-input"
+          type="number"
+          min={1}
+          max={65535}
+          bind:value={oscPort}
+          aria-label={copy.settings.vrchat.port}
+          onblur={commitOscPort}
+          onkeydown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              commitOscPort();
+            }
+          }}
+        />
+      </div>
+    </div>
+
+    <div class="field-block">
+      <span class="field-title">{copy.settings.vrchat.content}</span>
+      <ToggleGroup.Root
+        type="single"
+        value={companion.settings.vrchat_osc_mode}
+        onValueChange={(value) => value && setVrchatMode(value)}
+        spacing={1}
+        class="osc-toggle"
+        aria-label={copy.settings.vrchat.content}
+      >
+        {#each oscModes as mode (mode)}
+          <ToggleGroup.Item value={mode} class="osc-toggle-item" aria-label={oscModeLabel(mode)}>
+            {oscModeLabel(mode)}
+          </ToggleGroup.Item>
+        {/each}
+      </ToggleGroup.Root>
+      <p class="field-hint">{copy.settings.vrchat.contentHint}</p>
+    </div>
+
+    {#if companion.settings.vrchat_osc_mode === 'custom'}
+      <div class="field-block">
+        <div class="field-head">
+          <span class="field-title">{copy.settings.vrchat.customLabel}</span>
+          <span class="field-value">{oscCustomText.length}/108</span>
+        </div>
+        <Textarea
+          class="osc-textarea"
+          value={oscCustomText}
+          maxlength={108}
+          rows={4}
+          spellcheck={false}
+          placeholder={copy.settings.vrchat.customPlaceholder}
+          aria-label={copy.settings.vrchat.customLabel}
+          oninput={(event) => scheduleCustomText(event.currentTarget.value)}
+          onblur={commitCustomText}
+        />
+        <p class="field-hint">{copy.settings.vrchat.customHint}</p>
+      </div>
+    {/if}
+
+    <p class="section-note">{copy.settings.vrchat.note}</p>
   </section>
   </div>
 </div>
@@ -547,5 +721,83 @@
     color: #a5b2c7;
     font-size: 11.5px;
     cursor: default;
+  }
+
+  .osc-address-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 92px;
+    gap: 10px;
+  }
+
+  :global(.osc-input) {
+    height: 32px;
+    margin-top: 7px;
+    border-color: rgb(255 255 255 / 9%);
+    border-radius: 7px;
+    background: rgb(255 255 255 / 3%);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: #dce5f4;
+  }
+
+  :global(.osc-input::placeholder) {
+    color: #505d71;
+  }
+
+  :global(.osc-textarea) {
+    min-height: 84px;
+    margin-top: 7px;
+    border-color: rgb(255 255 255 / 9%);
+    border-radius: 7px;
+    background: rgb(255 255 255 / 3%);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.7;
+    color: #dce5f4;
+    resize: vertical;
+  }
+
+  :global(.osc-textarea::placeholder) {
+    color: #505d71;
+  }
+
+  :global(.osc-toggle) {
+    display: flex;
+    width: 100%;
+    gap: 3px;
+    margin-top: 7px;
+    padding: 3px;
+    border: 1px solid rgb(255 255 255 / 8%);
+    border-radius: 9px;
+    background: rgb(255 255 255 / 3%);
+  }
+
+  :global(.osc-toggle-item) {
+    flex: 1 1 0;
+    height: 32px;
+    min-width: 0;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: #8b97a9;
+    font-size: 11.5px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  :global(.osc-toggle-item:hover) {
+    background: rgb(255 255 255 / 6%);
+    color: #dce5f4;
+  }
+
+  :global(.osc-toggle-item[data-state='on']) {
+    background: #e8ecf4;
+    color: #131820;
+  }
+
+  :global(.osc-toggle-item[data-state='on']:hover) {
+    background: #f1f4f9;
+    color: #131820;
   }
 </style>

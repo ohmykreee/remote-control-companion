@@ -39,4 +39,6 @@ pub struct AppState {
     pub runtime: Mutex<RuntimeState>,
     pub bridge: BridgeInfo,
     pub capture_lock: Arc<Mutex<()>>,
+    /// Latest status report from the remote page for the VRChat chatbox panel.
+    pub remote_status: Mutex<Option<crate::vrchat::StatusSnapshot>>,
 }

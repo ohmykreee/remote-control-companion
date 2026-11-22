@@ -200,28 +200,38 @@ pub fn webview_profile(args: &str) -> String {
     format!("remote-{suffix}")
 }
 
-pub fn injection_script(settings: &Settings, url: &tauri::Url, bridge: &BridgeInfo) -> String {
+pub fn state_script(settings: &Settings, url: &tauri::Url) -> String {
+    let config = json!({
+        "origin": url.origin().ascii_serialization(),
+        "microphoneLabel": settings.microphone_label,
+        "reduceMotion": settings.reduce_motion,
+    });
+
+    include_str!("../assets/remote_bootstrap.js")
+        .replace("__DSH_COMPANION_CONFIG__", &config.to_string())
+}
+
+/// The VR screenshot API is the only part injected conditionally: it is a
+/// separate script so enabling it never changes the single state-reporting
+/// injection.
+pub fn vr_api_script(bridge: &BridgeInfo) -> String {
     let bridge_url = format!(
         "ws://127.0.0.1:{}/bridge?token={}",
         bridge.port, bridge.token
     );
     let config = json!({
-        "origin": url.origin().ascii_serialization(),
-        "microphoneLabel": settings.microphone_label,
-        "vrScreenshot": settings.replace_clipboard_with_vr,
-        "reduceMotion": settings.reduce_motion,
+        "vrScreenshot": true,
         "bridgeUrl": bridge_url,
     });
-
-    let vr_api = if settings.replace_clipboard_with_vr {
-        include_str!("../assets/remote_vr_api.js").to_string()
-    } else {
-        String::new()
-    };
-
-    include_str!("../assets/remote_bootstrap.js")
-        .replace("__DSH_COMPANION_CONFIG__", &config.to_string())
-        .replace("__DSH_COMPANION_VR_API__", &vr_api)
+    format!(
+        "(function () {{
+  var config = {};
+{}
+}})();
+",
+        config,
+        include_str!("../assets/remote_vr_api.js")
+    )
 }
 
 #[cfg(test)]
@@ -294,19 +304,22 @@ mod tests {
     }
 
     #[test]
-    fn injection_contains_api_only_when_enabled() {
-        let mut settings = Settings::default();
+    fn state_script_never_contains_the_screenshot_api() {
+        let settings = Settings::default();
         let url = normalize_remote_url("http://127.0.0.1:38765/").unwrap();
+        let script = state_script(&settings, &url);
+        assert!(!script.contains("captureVrScreenshot"));
+        assert!(!script.contains("bridgeUrl"));
+    }
+
+    #[test]
+    fn vr_api_script_is_injected_separately() {
         let bridge = BridgeInfo {
             port: 1234,
             token: "token".into(),
         };
-        let disabled = injection_script(&settings, &url, &bridge);
-        assert!(!disabled.contains("captureVrScreenshot"));
-
-        settings.replace_clipboard_with_vr = true;
-        let enabled = injection_script(&settings, &url, &bridge);
-        assert!(enabled.contains("captureVrScreenshot"));
-        assert!(enabled.contains("ws://127.0.0.1:1234/bridge?token=token"));
+        let script = vr_api_script(&bridge);
+        assert!(script.contains("captureVrScreenshot"));
+        assert!(script.contains("ws://127.0.0.1:1234/bridge?token=token"));
     }
 }

@@ -38,17 +38,18 @@ src-tauri/src/
   remote.rs               URL、安全上下文参数、远端初始化脚本
   backdrop.rs             用 WebView2 自身截取远控画面，作为菜单模糊背景
   motion.rs               把减少动态效果同步给远控页面的 prefers-reduced-motion
-  language.rs             通过 WebView2 消息接收远控页面语言
+  language.rs             通过 WebView2 消息接收远控页面语言、主题与状态
+  osc.rs                  最小 OSC 编码与 UDP 发送
+  vrchat.rs               VRChat 聊天框状态面板格式与刷新线程
   linux_webview.rs        Linux 原生应用栏/工具栏，以及 GTK 侧边栏布局
   window_behavior.rs      窗口透明度、全局老板键、靠边隐藏滑动
-  theme.rs                读取远控页面亮/暗主题并同步标题栏
   settings.rs             Data/settings.json
   capture.rs              OpenVR 截图、3 秒提示音
   bridge.rs               仅回环的 WebSocket 截图桥
   paths.rs                portable Data 布局
   state.rs                运行时状态、桥 token
 assets/
-  remote_bootstrap.js     注入远端页面的麦克风 shim 与 API 容器
+  remote_bootstrap.js     注入远端页面的麦克风 shim、状态回报与 API 容器
   remote_vr_api.js        暴露给 dsh-remote-control 的截图 API
 test/mock-remote.mjs      本地远控页 mock
 scripts/                  开发期 CDP 辅助脚本、便携打包
@@ -164,13 +165,26 @@ Tauri 命令里直接调用 `Window::add_child` / `Webview::set_size` 会在某�
 - 测试/调试边缘行为时，可以直接用 Win32 `MoveWindow` 把窗口贴边并 `SetCursorPos` 到窗口外；
   不要用截图判断，读取 `GetWindowRect` 的位置即可。
 
-### 主题联动
+### 远控页面状态上报（单次注入）
 
-- 远控页面在 `body.dataset.theme`（`light` / `dark`）和 `<html>` 的 `light` / `dark` 类上暴露主题；
-  `meta[name="theme-color"]` 也使用 `#eef2f8` / `#151a23`。`theme.rs` 每 500ms 用 WebView2
-  `ExecuteScript` 读取一次，通过 Tauri 事件 `remote-theme` 发给 chrome，TitleBar 只切换标题栏和下拉菜单。
-- 不要轮询整页截图判断主题，也不要修改远控页面的主题。查询失败或页面加载中时保留上一次主题，避免标题栏闪烁；
-  没有远控页面时标题栏保持暗色。
+- 每个远控 WebView 只调用一次 `initialization_script`：`remote.rs::state_script` 注入
+  `remote_bootstrap.js`，同时负责语言、主题、VRChat 状态、麦克风 shim 与减少动态效果。不要为语言、
+  主题或状态再 `ExecuteScript` / `evaluate_javascript` 轮询，也不要把一次页面读取拆成多个注入。
+- 同一个注入脚本内有多个行为：
+  - `companion-ui`：`DOMContentLoaded` 和 `MutationObserver` 在 `lang` / `class` / `data-theme` 变化时
+    立即上报 `language` / `theme`，去重后只发变化的字段；
+  - `companion-status`：每秒轮询 `window.__DSH_REMOTE__`，只上报 VRChat `status`；
+  - 麦克风 shim、reduce-motion 样式仍由这同一个脚本处理，不额外注入。
+- `language.rs` 统一处理 `companion-ui`（发 `remote-language` / `remote-theme` 事件并更新 Linux 原生栏）
+  和 `companion-status`（交给 `vrchat::handle_status_message`）。
+- VR 截图 API 是唯一按设置单独注入的部分：`remote.rs::vr_api_script` 只在
+  `replace_clipboard_with_vr` 开启时作为第二个 `initialization_script` 注入；它不能再塞回状态脚本，
+  也不要把 bridge token 暴露到全局。
+- 主题读取仅保留 `remote_bootstrap.js::readRemoteState` 的逻辑（`body.dataset.theme`、`html.light/dark`、
+  `meta[name=theme-color]`）。页面加载中或读取失败时不发 theme，保留上一次标题栏主题；返回连接页
+  `go_home` 调用 `language::reset_theme` 恢复暗色标题栏。
+- Linux 原生栏的 `set_language` / `set_theme` 由 `language.rs` 在收到 `companion-ui` 时调用；
+  不要恢复第二个 `evaluate_javascript` 轮询。
 - 亮色标题栏使用 `#eef2f8`，菜单使用白底深色文字；暗色保持现有风格。标题栏之外的主界面仍按暗色设计。
 
 ### i18n 与语言同步
@@ -182,9 +196,9 @@ Tauri 命令里直接调用 `Window::add_child` / `Webview::set_size` 会在某�
   新增字体也必须用 Fontsource 打包进 `dist`，不要依赖系统安装或外部 CDN。
 - App 在设置加载、用户选择语言、远控页面报告语言时更新文案；设置字段 `language` 只接受 `zh` / `en`，
   下次启动由 `get_bootstrap` 恢复。连接页标题栏显示语言菜单，进入远控后隐藏。
-- 远控页面语言是连接后的权威值：`remote_bootstrap.js` 观察 `<html lang>` 并通过
-  `window.chrome.webview.postMessage` 发出消息；`language.rs` 安装 WebView2 消息监听并发出
-  `remote-language`；App 收到后保存设置。不要改用 Tauri command（远端 WebView 没有对应权限）。
+- 远控页面语言是连接后的权威值：`remote_bootstrap.js` 在 `companion-ui` 消息的 `language` 字段中，
+  在 `<html lang>` 变化时立即上报；`language.rs` 安装消息监听并发 `remote-language`；App 收到后保存设置。
+  不要改用 Tauri command（远端 WebView 没有对应权限）。
 - 不要在批量替换 UTF-8 文本时使用 PowerShell `Get-Content`/`Set-Content`：本机 PowerShell 曾把中文变成乱码。
   使用编辑工具或显式 UTF-8 读写。
 - “回到连接页”走 `go_home`：关闭远端 WebView、清空运行时的 remote URL/overlay，并重新同步本地 chrome；
@@ -254,6 +268,30 @@ Tauri 命令里直接调用 `Window::add_child` / `Webview::set_size` 会在某�
   这是运行时依赖，不是单元测试失败。
 - 截图结束必须调用 `VR_ShutdownInternal`；同一时间只允许一个截图任务（`capture_lock`）。
 
+### VRChat OSC 聊天框
+
+- 设置字段：`vrchat_osc_enabled`、`vrchat_osc_host`（默认 `127.0.0.1`）、`vrchat_osc_port`（默认 `9000`）、
+  `vrchat_osc_mode`（`clock` / `music` / `system` / `agent` / `custom`）、`vrchat_osc_custom_text`。
+  这些字段由后台线程每轮重新读取，修改后立即生效，不需要刷新或重连远控页面。
+- 数据只来自远控页面的 `window.__DSH_REMOTE__`：`remote_bootstrap.js` 每秒把时间、天气、媒体、性能、
+  会话与余额裁剪成 `companion-status` 消息；`language.rs` 的消息监听转给
+  `vrchat::handle_status_message`。不要为这些信息另开系统 API，也不要读取 dsh-remote-control 的内部实现。
+- `vrchat.rs` 生成顶部装饰标题行 + 文字的小面板，**没有底部横线**。普通内容最多三行文字（共四行）；性能面板
+  固定四行（CPU 型号、CPU 与内存、GPU 型号、GPU 与显存），共五行。VRChat 聊天框按行居中，所以
+  **不要加左右竖线，也不要用行尾空格对齐**；标题两侧的 `·=` 花纹必须对称，标题用 `« »` 框住。
+  所有文案跟随 `settings.language`，中英文标题、状态和天气标签都在 `vrchat.rs` 内。
+- `custom` 模式**不加任何装饰**：直接发送 `vrchat_osc_custom_text`，最多 4 行、108 个字符（`settings.rs`
+  的 `sanitize_custom_text`），空内容不发送。自定义文字不依赖远控页面，没有连接页面时也可以持续显示。
+- 整条消息必须 ≤ 144 字符（VRChat 聊天框上限）；单行文字留有截断保护，标题规则也受同一预算约束。
+  发送频率固定约 1.5 秒，符合 VRChat 约 5 条 / 5 秒的限制；不要改成逐帧或明显更快的刷新。
+- `osc.rs` 只实现最小的 `/chatbox/input` 编码：地址、`,sT`（立即发送）和字符串参数，四项对齐补零；
+  通过 `UdpSender` 发到配置的地址与端口。不要引入第三方 OSC 依赖，也不要发 `/chatbox/typing`。
+- 没有远控页面、或状态超过 6 秒未更新时，发送「等待远控页面」面板，且每 8 秒最多一次；关闭功能或
+  关闭远控页面后不再发送。发送失败只记录目标地址与错误，并做 30 秒节流。
+- 图标只使用在 VRChat 聊天框里实测能显示的字符：标题 `⏱ ⚙ ★ ♪`，天气 `☀ ● ☁ ☂ ❄ ⚡`，
+  CPU/GPU `■ ▤`。已实测缺字或会退化成圆圈的字符有 `☾`、`◈`、`≋`、`▭`、`▬`；新增图标必须先在游戏里确认再使用。
+- 不要把面板内容（位置、歌曲、余额）写进日志；这些是用户隐私数据。
+
 ## 数据与便携约定
 
 - 发行版目录：
@@ -281,7 +319,8 @@ Data/
 pnpm dlx shadcn-svelte@latest add <component> --overwrite --yes
 ```
 
-- 当前已使用：Button、Input、Checkbox、Switch、Select、Slider、Dialog、Progress、Separator、DropdownMenu、Sonner、Tooltip。
+- 当前已使用：Button、Input、Textarea、Checkbox、Switch、Select、ToggleGroup、Slider、Dialog、Progress、Separator、DropdownMenu、Sonner、Tooltip。
+  设置页的「显示内容」使用 ToggleGroup 做分段选择，不要退回下拉菜单或手写分段控件。
 - `components.json` 的 style 使用生成器支持的 `nova`。`$lib/utils.ts` 的 `cn` 来自 `cn` 包。
 - 图标只用 `@lucide/svelte`；不要画自定义功能图标、不要 emoji。
 - 界面保持小而安静：初始窗口只有左侧连接、右侧设置；不要再加入大段装饰、状态卡堆叠或第二个主按钮。
@@ -312,6 +351,8 @@ pnpm dlx shadcn-svelte@latest add <component> --overwrite --yes
   （字段、默认值、sanitize、持久化）。
 - 与远端页面有关的设置项要明确“刷新后生效”还是“重连后生效”。窗口透明度、老板键、靠边隐藏属于本地窗口行为，
   不需要刷新远控页面。新增窗口字段时同时检查 `window_behavior::apply_*` 的启动应用路径。
+- VRChat OSC 的开关、地址、端口与显示内容都立即生效，不需要刷新远控页面；文案同步
+  `src/lib/copy.svelte.ts`、`src/lib/components/SettingsPanel.svelte`、`src-tauri/src/settings.rs`。
 - 修改页面结构后，运行 `pnpm check` 与 `pnpm build`；修改 Rust 后运行 `cargo test` 与 `cargo check`。
 
 ## 开发调试
@@ -326,8 +367,15 @@ pnpm dlx shadcn-svelte@latest add <component> --overwrite --yes
   - 已验证减少动态效果通过 CDP 同步到远控页面，`matchMedia` 收到 change 事件。
   - 已用 LAN http 地址验证安全上下文豁免（`window.isSecureContext === true`）和远端独立调试端口。
   - 已验证按 label 选择麦克风后，远端页面 `getUserMedia` 返回所选设备。
+  - 已用真实 VRChat（游戏内开启 OSC）验证聊天框面板：时间天气、音乐与进度、居中对称标题规则、
+    `▶` / `⏸` 状态图标和实时进度刷新。
+  - 已验证单次注入同时处理 `companion-status` 轮询、`companion-ui` 语言/主题钩子与 reduce-motion；
+    VR 截图 API 只在设置开启时作为单独的第二个注入出现。
 - 本地 mock 远控页：`node test/mock-remote.mjs`，默认 `http://127.0.0.1:39001/`；页面会显示
-  `isSecureContext`、伴侣 API 是否可用、麦克风与截图结果。
+  `isSecureContext`、伴侣 API 是否可用、麦克风与截图结果，并提供 `window.__DSH_REMOTE__` 假数据，
+  用于不连接真实远控页面时测试 VRChat OSC 面板。
+- VRChat OSC 的本机测试：游戏内开启 OSC 后，在设置中开启「VRChat OSC 展示」并选择内容；默认发到
+  `127.0.0.1:9000`。没有真实远控页面时可以先用上面的 mock 页，聊天框会显示它的假数据。
 - 调试 WebView（仅开发构建）：直接运行 `pnpm dev:tauri`。本地 chrome 使用 DevTools 端口 `9222`，
   远端 WebView 使用独立端口 `9223`（`DSH_COMPANION_REMOTE_DEBUG_PORT` 可覆盖），不需要设置浏览器参数环境变量。
   `scripts/cdp-shot.mjs`、`cdp-eval.mjs`、`cdp-click.mjs`、`cdp-console.mjs` 用于本地验证。
@@ -373,8 +421,8 @@ LICENSE、THIRD_PARTY_NOTICES。
   也不要把它重新塞进 `GtkFixed` 或 reparent WebKit 控件，这会在 GTK/Wayland 下崩溃。
 - 原生栏按钮通过 `linux-open-settings`、`linux-back-home`、`linux-refresh` 事件驱动前端，语言由
   `set_language` 更新；主题由 `set_theme` 更新。事件名和按钮文案必须与 `App.svelte` 的监听保持一致。
-- Linux 的主题/语言轮询在 `theme.rs` 中通过 WebKitGTK `evaluate_javascript` 完成；不要依赖 WebView2
-  的 `ExecuteScript`。`remote-theme` / `remote-language` 事件仍发给 chrome。
+- Linux 不再单独轮询主题/语言：`language.rs` 收到 `companion-ui` 后调用原生栏的
+  `set_language` / `set_theme`，同时发 `remote-theme` / `remote-language` 事件给 chrome。
 - Linux 的减少动态效果由 `remote_bootstrap.js` 注入样式；Windows 仍使用 CDP 的
   `Emulation.setEmulatedMedia`。
 - Linux VR 截图使用 OpenVR 的 `libopenvr_api.so`：程序目录、`$HOME` 下的 SteamVR 安装和

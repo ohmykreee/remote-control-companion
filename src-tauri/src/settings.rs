@@ -22,10 +22,21 @@ pub struct Settings {
     pub edge_autohide_edges: Vec<String>,
     pub reduce_motion: bool,
     pub language: String,
+    pub vrchat_osc_enabled: bool,
+    pub vrchat_osc_host: String,
+    pub vrchat_osc_port: u16,
+    pub vrchat_osc_mode: String,
+    pub vrchat_osc_custom_text: String,
 }
 
 pub const MIN_WINDOW_OPACITY: u8 = 5;
 pub const EDGE_SIDES: [&str; 3] = ["top", "left", "right"];
+pub const VRC_OSC_MODES: [&str; 5] = ["clock", "music", "system", "agent", "custom"];
+pub const VRC_OSC_CUSTOM_MAX_CHARS: usize = 108;
+pub const VRC_OSC_CUSTOM_MAX_LINES: usize = 4;
+pub const DEFAULT_VRC_OSC_HOST: &str = "127.0.0.1";
+pub const DEFAULT_VRC_OSC_PORT: u16 = 9000;
+pub const DEFAULT_VRC_OSC_MODE: &str = "clock";
 
 impl Default for Settings {
     fn default() -> Self {
@@ -45,6 +56,11 @@ impl Default for Settings {
             edge_autohide_edges: vec!["right".to_string()],
             reduce_motion: false,
             language: "zh".to_string(),
+            vrchat_osc_enabled: false,
+            vrchat_osc_host: DEFAULT_VRC_OSC_HOST.to_string(),
+            vrchat_osc_port: DEFAULT_VRC_OSC_PORT,
+            vrchat_osc_mode: DEFAULT_VRC_OSC_MODE.to_string(),
+            vrchat_osc_custom_text: String::new(),
         }
     }
 }
@@ -82,6 +98,17 @@ impl Settings {
         } else {
             "zh".to_string()
         };
+        self.vrchat_osc_host = sanitize_osc_host(&self.vrchat_osc_host);
+        if self.vrchat_osc_port == 0 {
+            self.vrchat_osc_port = DEFAULT_VRC_OSC_PORT;
+        }
+        let osc_mode = self.vrchat_osc_mode.trim().to_ascii_lowercase();
+        self.vrchat_osc_mode = if VRC_OSC_MODES.contains(&osc_mode.as_str()) {
+            osc_mode
+        } else {
+            DEFAULT_VRC_OSC_MODE.to_string()
+        };
+        self.vrchat_osc_custom_text = sanitize_custom_text(&self.vrchat_osc_custom_text);
         let mut edges = Vec::new();
         for edge in &self.edge_autohide_edges {
             let normalized = edge.trim().to_ascii_lowercase();
@@ -91,6 +118,48 @@ impl Settings {
         }
         self.edge_autohide_edges = edges;
     }
+}
+
+/// Custom chatbox text is shown as-is: keep the user's line breaks and spaces,
+/// but cap it at four lines / 108 characters so the full message stays inside
+/// VRChat's 144-character limit.
+pub fn sanitize_custom_text(raw: &str) -> String {
+    let normalized = raw.replace("\r\n", "\n").replace('\r', "\n");
+    let normalized: String = normalized
+        .chars()
+        .filter(|ch| *ch == '\n' || (!ch.is_control() && *ch != '\t'))
+        .collect();
+    let normalized = normalized.trim_end_matches('\n');
+    let mut lines: Vec<&str> = normalized
+        .split('\n')
+        .take(VRC_OSC_CUSTOM_MAX_LINES)
+        .collect();
+    while lines.len() > 1 && lines.last().is_some_and(|line| line.is_empty()) {
+        lines.pop();
+    }
+    let mut text = lines.join("\n");
+    if text.chars().count() > VRC_OSC_CUSTOM_MAX_CHARS {
+        text = text.chars().take(VRC_OSC_CUSTOM_MAX_CHARS).collect();
+    }
+    text
+}
+
+/// Accept plain host names and IP addresses, but tolerate a pasted URL or an
+/// `address:port` pair so the field stays forgiving. A port typed into the
+/// address field is not split off here; the separate port field stays the
+/// source of truth.
+fn sanitize_osc_host(raw: &str) -> String {
+    let mut value = raw.trim();
+    for prefix in ["osc://", "udp://", "https://", "http://"] {
+        if let Some(rest) = value.strip_prefix(prefix) {
+            value = rest;
+        }
+    }
+    let value = value.trim_end_matches('/').trim();
+    if value.is_empty() {
+        return DEFAULT_VRC_OSC_HOST.to_string();
+    }
+    value.chars().take(255).collect()
 }
 
 pub fn load() -> Settings {
@@ -165,5 +234,59 @@ mod tests {
         };
         settings.sanitize();
         assert!(settings.edge_autohide_edges.is_empty());
+    }
+
+    #[test]
+    fn sanitize_normalizes_vrchat_osc_fields() {
+        let mut settings = Settings {
+            vrchat_osc_host: "  http://192.168.1.20/  ".to_string(),
+            vrchat_osc_port: 0,
+            vrchat_osc_mode: "MUSIC".to_string(),
+            ..Settings::default()
+        };
+        settings.sanitize();
+        assert_eq!(settings.vrchat_osc_host, "192.168.1.20");
+        assert_eq!(settings.vrchat_osc_port, DEFAULT_VRC_OSC_PORT);
+        assert_eq!(settings.vrchat_osc_mode, "music");
+    }
+
+    #[test]
+    fn sanitize_falls_back_for_unknown_osc_mode_and_empty_host() {
+        let mut settings = Settings {
+            vrchat_osc_host: "   ".to_string(),
+            vrchat_osc_port: 38765,
+            vrchat_osc_mode: "playlist".to_string(),
+            ..Settings::default()
+        };
+        settings.sanitize();
+        assert_eq!(settings.vrchat_osc_host, DEFAULT_VRC_OSC_HOST);
+        assert_eq!(settings.vrchat_osc_port, 38765);
+        assert_eq!(settings.vrchat_osc_mode, DEFAULT_VRC_OSC_MODE);
+    }
+
+    #[test]
+    fn sanitize_custom_text_keeps_lines_and_limits_size() {
+        assert_eq!(
+            sanitize_custom_text("  第一行  \n第二行"),
+            "  第一行  \n第二行"
+        );
+        assert_eq!(sanitize_custom_text("a\nb\nc\nd\ne"), "a\nb\nc\nd");
+        assert_eq!(sanitize_custom_text("a\r\nb"), "a\nb");
+        assert_eq!(sanitize_custom_text("a\n\n\n\n"), "a");
+        let long = "x".repeat(200);
+        assert_eq!(
+            sanitize_custom_text(&long).chars().count(),
+            VRC_OSC_CUSTOM_MAX_CHARS
+        );
+    }
+
+    #[test]
+    fn sanitize_accepts_custom_osc_mode() {
+        let mut settings = Settings {
+            vrchat_osc_mode: "CUSTOM".to_string(),
+            ..Settings::default()
+        };
+        settings.sanitize();
+        assert_eq!(settings.vrchat_osc_mode, "custom");
     }
 }

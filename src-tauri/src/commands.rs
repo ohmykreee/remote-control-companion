@@ -170,6 +170,7 @@ fn go_home_blocking(app: AppHandle) -> Result<LayoutState, String> {
     }
     runtime.overlay = false;
     layout::sync(&app, &runtime)?;
+    crate::language::reset_theme(&app);
     Ok(layout_state(&runtime))
 }
 

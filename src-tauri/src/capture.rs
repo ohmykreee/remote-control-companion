@@ -65,7 +65,6 @@ fn three_second_countdown() {
             );
         }
         std::thread::sleep(Duration::from_secs(3));
-        return;
     }
 
     #[cfg(target_os = "linux")]

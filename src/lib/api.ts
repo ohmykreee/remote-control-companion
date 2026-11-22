@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 
 export type EdgeSide = 'top' | 'left' | 'right';
+export type VrchatOscMode = 'clock' | 'music' | 'system' | 'agent' | 'custom';
 
 export interface Settings {
   version: number;
@@ -18,6 +19,11 @@ export interface Settings {
   edge_autohide_edges: EdgeSide[];
   reduce_motion: boolean;
   language: 'zh' | 'en';
+  vrchat_osc_enabled: boolean;
+  vrchat_osc_host: string;
+  vrchat_osc_port: number;
+  vrchat_osc_mode: VrchatOscMode;
+  vrchat_osc_custom_text: string;
 }
 
 export interface AppInfo {
@@ -58,6 +64,11 @@ export const DEFAULT_SETTINGS: Settings = {
   edge_autohide_edges: ['right'],
   reduce_motion: false,
   language: 'zh',
+  vrchat_osc_enabled: false,
+  vrchat_osc_host: '127.0.0.1',
+  vrchat_osc_port: 9000,
+  vrchat_osc_mode: 'clock',
+  vrchat_osc_custom_text: '',
 };
 
 export const api = {

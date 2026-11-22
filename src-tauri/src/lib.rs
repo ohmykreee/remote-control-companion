@@ -10,11 +10,12 @@ mod logging;
 #[cfg(target_os = "linux")]
 mod loopback_proxy;
 mod motion;
+mod osc;
 mod paths;
 mod remote;
 mod settings;
 mod state;
-mod theme;
+mod vrchat;
 mod window_behavior;
 
 use std::sync::{Arc, Mutex};
@@ -91,9 +92,11 @@ pub fn run() {
                 runtime: Mutex::new(RuntimeState::new(loaded)),
                 bridge: bridge_info,
                 capture_lock: Arc::new(Mutex::new(())),
+                remote_status: Mutex::new(None),
             });
 
             bridge::start(app.handle().clone(), listener);
+            vrchat::start(app.handle().clone());
 
             #[cfg(target_os = "linux")]
             let (initial_width, initial_height, min_width, min_height) = {
@@ -161,7 +164,6 @@ pub fn run() {
 
             window.show()?;
             window_behavior::start_autohide(app.handle().clone());
-            theme::start(app.handle().clone());
 
             if !initial_boss_key.is_empty() {
                 let app_handle = app.handle().clone();

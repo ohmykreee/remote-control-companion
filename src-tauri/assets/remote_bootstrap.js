@@ -5,10 +5,9 @@
   var config = __DSH_COMPANION_CONFIG__;
   if (location.origin !== config.origin) return;
 
-  // Report language and theme to the companion. Windows uses WebView2's
-  // web-message channel; WebKitGTK exposes the equivalent through its script
-  // message handler. The interval also covers handlers installed just after
-  // the first page load.
+  // Report the page's language, theme and live console data through the single
+  // host message channel. Windows uses WebView2's web-message channel;
+  // WebKitGTK exposes the equivalent through its script message handler.
   var sendToCompanion = function (message) {
     var payload = JSON.stringify(message);
     try {
@@ -26,58 +25,32 @@
         webview.postMessage(payload);
       }
     } catch (_) {
-      // The page works without host-side language/theme hints.
+      // The page works without host-side state hints.
     }
   };
 
-  try {
-    var syncRemoteState = function () {
-      var raw = String(document.documentElement.getAttribute('lang') || '').toLowerCase();
-      var language = raw.indexOf('zh') === 0 ? 'zh' : raw.indexOf('en') === 0 ? 'en' : '';
-      if (language) {
-        sendToCompanion({ type: 'companion-language', language: language });
-      }
+  var readRemoteState = function () {
+    var html = document.documentElement;
+    var raw = String((html && html.getAttribute('lang')) || '').toLowerCase();
+    var language = raw.indexOf('zh') === 0 ? 'zh' : raw.indexOf('en') === 0 ? 'en' : '';
 
-      var body = document.body;
-      var theme = body && body.dataset ? body.dataset.theme || '' : '';
-      if (theme !== 'light' && theme !== 'dark') {
-        var html = document.documentElement;
-        theme = html.classList.contains('light')
-          ? 'light'
-          : html.classList.contains('dark')
-            ? 'dark'
-            : '';
-      }
-      if (!theme) {
-        var meta = document.querySelector('meta[name="theme-color"]');
-        var color = meta && meta.content ? meta.content.trim().toLowerCase() : '';
-        if (color === '#eef2f8') theme = 'light';
-        else if (color === '#151a23') theme = 'dark';
-      }
-      if (theme === 'light' || theme === 'dark') {
-        sendToCompanion({ type: 'companion-theme', theme: theme });
-      }
-    };
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', syncRemoteState, { once: true });
-    } else {
-      syncRemoteState();
+    var body = document.body;
+    var theme = body && body.dataset ? body.dataset.theme || '' : '';
+    if (theme !== 'light' && theme !== 'dark') {
+      theme = html && html.classList.contains('light')
+        ? 'light'
+        : html && html.classList.contains('dark')
+          ? 'dark'
+          : '';
     }
-    try {
-      if (document.documentElement) {
-        new MutationObserver(syncRemoteState).observe(document.documentElement, {
-          attributes: true,
-          subtree: true,
-          attributeFilter: ['lang', 'class', 'data-theme'],
-        });
-      }
-    } catch (_) {
-      // The interval below still catches changes.
+    if (!theme) {
+      var meta = document.querySelector('meta[name="theme-color"]');
+      var color = meta && meta.content ? meta.content.trim().toLowerCase() : '';
+      if (color === '#eef2f8') theme = 'light';
+      else if (color === '#151a23') theme = 'dark';
     }
-    setInterval(syncRemoteState, 1000);
-  } catch (_) {
-    // Language/theme sync is best-effort; the page works without it.
-  }
+    return { language: language, theme: theme };
+  };
 
   var reduceMotionStyle = function (enabled) {
     var style = document.getElementById('dsh-reduce-motion-style');
@@ -163,5 +136,237 @@
     // Browser versions that lock mediaDevices stay on the system default.
   }
 
-  __DSH_COMPANION_VR_API__
+  // Report the remote console's live data for the VRChat chatbox panel. Only
+  // the fields the panel needs are copied out of the page's own state; the
+  // companion formats and sends the OSC message.
+  try {
+    var mediaAnchor = { key: '', position: 0, at: 0 };
+
+    var finiteNumber = function (value) {
+      if (value === null || value === undefined || value === '') return null;
+      var number = Number(value);
+      return Number.isFinite(number) ? number : null;
+    };
+    var textValue = function (value) {
+      return typeof value === 'string' ? value : value === null || value === undefined ? '' : String(value);
+    };
+
+    var clockParts = function () {
+      var now = new Date();
+      var pad = function (value) { return String(value).padStart(2, '0'); };
+      var lang = String(document.documentElement.getAttribute('lang') || '').toLowerCase();
+      var locale = lang.indexOf('en') === 0 ? 'en-US' : 'zh-CN';
+      var weekday = '';
+      try {
+        weekday = new Intl.DateTimeFormat(locale, { weekday: 'short' }).format(now);
+      } catch (_) {
+        weekday = '';
+      }
+      return {
+        date: pad(now.getMonth() + 1) + '-' + pad(now.getDate()),
+        weekday: weekday,
+        time: pad(now.getHours()) + ':' + pad(now.getMinutes())
+      };
+    };
+
+    var mediaProgress = function (media, playing) {
+      var raw = finiteNumber(media.position);
+      var start = finiteNumber(media.startTime);
+      var end = finiteNumber(media.endTime);
+      var duration = 0;
+      if (end !== null) {
+        duration = Math.max(0, end - (start !== null ? start : 0));
+        if (!(duration > 0)) duration = Math.max(0, end);
+      }
+      var position = raw !== null ? Math.max(0, raw) : 0;
+      var key = [textValue(media.title), textValue(media.artist), start, end].join('\u0001');
+      var now = Date.now();
+      if (key !== mediaAnchor.key || raw === null) {
+        mediaAnchor = { key: key, position: position, at: now };
+      } else if (
+        Math.abs(raw - mediaAnchor.position) > 0.75 ||
+        raw < mediaAnchor.position - 2 ||
+        raw > mediaAnchor.position + 4
+      ) {
+        mediaAnchor.position = raw;
+        mediaAnchor.at = now;
+      }
+      if (playing) position = mediaAnchor.position + (now - mediaAnchor.at) / 1000;
+      if (duration > 0) position = Math.min(position, duration);
+      return { position: Math.max(0, position), duration: duration };
+    };
+
+    var weatherStatus = function (app) {
+      var weather = app.weather;
+      var loaded = weather !== null && weather !== undefined;
+      if (!loaded || weather.ok === false) {
+        return { loaded: loaded, available: false };
+      }
+      var current = weather.current || {};
+      var daily = weather.daily || {};
+      var unit = String(app.temperatureUnit || 'celsius').toLowerCase() === 'fahrenheit' ? 'F' : 'C';
+      var convert = function (value) {
+        var number = finiteNumber(value);
+        if (number === null) return null;
+        return Math.round(unit === 'F' ? (number * 9) / 5 + 32 : number);
+      };
+      return {
+        loaded: true,
+        available: true,
+        location: weather.location && !weather.location.nameFallback ? textValue(weather.location.name) : '',
+        code: finiteNumber(current.code),
+        isDay: typeof current.isDay === 'boolean' ? current.isDay : null,
+        temperature: convert(current.temperature),
+        high: convert(daily.high),
+        low: convert(daily.low),
+        unit: unit
+      };
+    };
+
+    var musicStatus = function (app) {
+      var payload = app.media;
+      var media = payload && payload.media && payload.media.media;
+      if (!media) return { has: false };
+      var playing = String(media.playbackStatus || '').toLowerCase() === 'playing';
+      var progress = mediaProgress(media, playing);
+      return {
+        has: true,
+        title: textValue(media.title),
+        artist: textValue(media.artist || media.albumArtist),
+        album: textValue(media.album),
+        playing: playing,
+        position: progress.position,
+        duration: progress.duration
+      };
+    };
+
+    var systemStatus = function (app) {
+      var performance = app.performance;
+      var cpu = (performance && performance.cpu) || {};
+      var memory = (performance && performance.memory) || {};
+      var gpu = (performance && performance.gpu) || {};
+      return {
+        cpuModel: textValue(cpu.model),
+        cpuUsage: finiteNumber(cpu.usage),
+        memUsed: finiteNumber(memory.used),
+        memTotal: finiteNumber(memory.total),
+        memPercent: finiteNumber(memory.percent),
+        gpuOk: gpu.ok !== false,
+        gpuName: textValue(gpu.name),
+        gpuUsage: finiteNumber(gpu.utilization),
+        vramUsed: finiteNumber(gpu.memoryUsed),
+        vramTotal: finiteNumber(gpu.memoryTotal),
+        vramPercent: finiteNumber(gpu.memoryPercent)
+      };
+    };
+
+    var agentStatus = function (app) {
+      var sessions = Array.isArray(app.sessions) ? app.sessions : [];
+      var running = 0;
+      var waiting = 0;
+      var errors = 0;
+      sessions.forEach(function (session) {
+        var status = session && session.status;
+        if (status === 'running') running += 1;
+        else if (status === 'question') waiting += 1;
+        else if (status === 'error') errors += 1;
+      });
+      var account = app.account;
+      var loaded = account !== null && account !== undefined;
+      var signedIn = loaded && account.available !== false && !!account.signedIn;
+      var balance = (account && account.balance) || {};
+      var usage = (account && account.usage) || {};
+      return {
+        running: running,
+        waiting: waiting,
+        errors: errors,
+        accountLoaded: loaded,
+        signedIn: signedIn,
+        lowBalance: !!(account && account.lowBalance),
+        balance: signedIn ? finiteNumber(balance.balance) : null,
+        currency: textValue(balance.currency || usage.currency || 'CNY'),
+        todaySpend: finiteNumber(usage.today)
+      };
+    };
+
+    var collectStatus = function () {
+      var app = window.__DSH_REMOTE__;
+      if (!app || typeof app !== 'object') return null;
+      var clock = clockParts();
+      return {
+        date: clock.date,
+        weekday: clock.weekday,
+        time: clock.time,
+        weather: weatherStatus(app),
+        music: musicStatus(app),
+        system: systemStatus(app),
+        agent: agentStatus(app)
+      };
+    };
+
+    var reportStatus = function () {
+      try {
+        var status = collectStatus();
+        if (status) sendToCompanion({ type: 'companion-status', status: status });
+      } catch (_) {
+        // Status is optional; the page keeps working without it.
+      }
+    };
+
+    var lastLanguage = '';
+    var lastTheme = '';
+    var reportUiState = function () {
+      try {
+        var state = readRemoteState();
+        var languageChanged = state.language && state.language !== lastLanguage;
+        var themeChanged = state.theme && state.theme !== lastTheme;
+        if (!languageChanged && !themeChanged) return;
+        if (languageChanged) lastLanguage = state.language;
+        if (themeChanged) lastTheme = state.theme;
+        var message = { type: 'companion-ui' };
+        if (languageChanged) message.language = state.language;
+        if (themeChanged) message.theme = state.theme;
+        sendToCompanion(message);
+      } catch (_) {
+        // UI hints are optional; the page keeps working without them.
+      }
+    };
+
+    var uiObserverInstalled = false;
+    var installUiObserver = function () {
+      if (uiObserverInstalled) return;
+      var root = document.documentElement;
+      if (!root) {
+        setTimeout(installUiObserver, 50);
+        return;
+      }
+      try {
+        new MutationObserver(reportUiState).observe(root, {
+          attributes: true,
+          subtree: true,
+          attributeFilter: ['lang', 'class', 'data-theme'],
+        });
+        uiObserverInstalled = true;
+        reportUiState();
+      } catch (_) {
+        setTimeout(installUiObserver, 500);
+      }
+    };
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', function () {
+        installUiObserver();
+        reportStatus();
+      }, { once: true });
+    } else {
+      installUiObserver();
+      reportStatus();
+    }
+    setInterval(function () {
+      installUiObserver();
+      reportStatus();
+    }, 1000);
+  } catch (_) {
+    // Chatbox status is best-effort.
+  }
+
 })();

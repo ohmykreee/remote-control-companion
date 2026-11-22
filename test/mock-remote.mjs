@@ -150,6 +150,55 @@ const page = String.raw`<!doctype html>
       $('capture').click();
     }, 2500);
   }
+
+  // Fixture for the companion's VRChat OSC panel. The real page exposes the
+  // same shape at window.__DSH_REMOTE__; the injected status reporter only
+  // reads the fields it needs.
+  const mockMedia = {
+    title: 'Mock Song',
+    artist: 'Mock Artist',
+    album: 'Mock Album',
+    playbackStatus: 'Playing',
+    position: 0,
+    startTime: 0,
+    endTime: 200,
+  };
+  window.__DSH_REMOTE__ = {
+    online: true,
+    temperatureUnit: 'celsius',
+    weather: {
+      ok: true,
+      location: { name: 'Mock City' },
+      current: { code: 2, isDay: false, temperature: 14, feelsLike: 12, humidity: 71 },
+      daily: { high: 15, low: 13 },
+    },
+    media: { media: { media: mockMedia }, volume: { volume: 0.6, muted: false } },
+    performance: {
+      cpu: { model: 'AMD Ryzen 7 5700X3D 8-Core Processor', usage: 42 },
+      memory: { total: 34359738368, used: 13743895347, percent: 39 },
+      gpu: {
+        ok: true,
+        name: 'AMD Radeon RX 7800 XT',
+        utilization: 61,
+        memoryTotal: 8589934592,
+        memoryUsed: 4509715660,
+        memoryPercent: 52,
+      },
+    },
+    sessions: [{ id: 'mock-running', status: 'running' }, { id: 'mock-done', status: 'done' }],
+    account: {
+      available: true,
+      signedIn: true,
+      lowBalance: false,
+      balance: { currency: 'CNY', balance: 12.34, state: 'ready' },
+      usage: { currency: 'CNY', today: 3.21 },
+    },
+    clockNow: Date.now(),
+  };
+  setInterval(() => {
+    mockMedia.position = (mockMedia.position + 1.2) % 200;
+    window.__DSH_REMOTE__.clockNow = Date.now();
+  }, 1000);
 </script>
 </body>
 </html>`;
