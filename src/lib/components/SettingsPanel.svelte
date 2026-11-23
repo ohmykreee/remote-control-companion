@@ -9,7 +9,7 @@
   import MicrophonePanel from './MicrophonePanel.svelte';
   import { companion } from '$lib/state.svelte';
   import { copy } from '$lib/copy.svelte';
-  import { api, type EdgeSide, type VrchatOscMode } from '$lib/api';
+  import { api, type EdgeSide, type OscPreview, type VrchatOscMode } from '$lib/api';
 
   let { dialog = false }: { dialog?: boolean } = $props();
 
@@ -20,7 +20,22 @@
   let oscHost = $state(companion.settings.vrchat_osc_host);
   let oscPort = $state<number | undefined>(companion.settings.vrchat_osc_port);
   let oscCustomText = $state(companion.settings.vrchat_osc_custom_text);
+  let oscPreview = $state<OscPreview>({ connected: false, items: [], panel: '' });
+  let customPreviewMode = $state<'auto' | 'all' | 'text'>('auto');
   let customSaveTimer: ReturnType<typeof setTimeout> | null = null;
+  let customLineCount = $derived(oscCustomText.split('\n').length);
+  let customTooManyLines = $derived(customLineCount > 4);
+  let showPlaceholders = $derived(
+    customPreviewMode === 'all' ||
+      (customPreviewMode === 'auto' && !oscCustomText.trim())
+  );
+  let customPreviewText = $derived.by(() => {
+    let text = oscCustomText;
+    for (const item of oscPreview.items) {
+      text = text.split(`{${item.key}}`).join(item.value);
+    }
+    return text;
+  });
 
   const edgeOptions: EdgeSide[] = ['top', 'left', 'right'];
   const oscModes: VrchatOscMode[] = ['clock', 'music', 'system', 'agent', 'custom'];
@@ -169,14 +184,16 @@
   }
 
   function limitCustomText(value: string): string {
-    const lines = value.replace(/\r\n?/g, '\n').split('\n').slice(0, 4);
-    const text = lines.join('\n');
-    return text.length > 108 ? text.slice(0, 108) : text;
+    const text = value.replace(/\r\n?/g, '\n');
+    return text.length > 160 ? text.slice(0, 160) : text;
   }
 
   function scheduleCustomText(value: string): void {
-    oscCustomText = limitCustomText(value);
+    const next = limitCustomText(value);
+    oscCustomText = next;
     if (customSaveTimer) clearTimeout(customSaveTimer);
+    customSaveTimer = null;
+    if (next.split('\n').length > 4) return;
     customSaveTimer = setTimeout(() => {
       customSaveTimer = null;
       void companion.save({ vrchat_osc_custom_text: oscCustomText });
@@ -189,10 +206,39 @@
       clearTimeout(customSaveTimer);
       customSaveTimer = null;
     }
+    if (oscCustomText.split('\n').length > 4) return;
     if (oscCustomText !== companion.settings.vrchat_osc_custom_text) {
       void companion.save({ vrchat_osc_custom_text: oscCustomText });
     }
   }
+
+  function toggleCustomPreview(): void {
+    customPreviewMode = showPlaceholders ? 'text' : 'all';
+  }
+
+  function setOscPushEnabled(checked: boolean): void {
+    void companion.save({ vrchat_osc_push_enabled: checked });
+  }
+
+  $effect(() => {
+    const mode = companion.settings.vrchat_osc_mode;
+    if (!mode) return;
+    let active = true;
+    const load = () => {
+      void api
+        .getOscPreview()
+        .then((preview) => {
+          if (active) oscPreview = preview;
+        })
+        .catch(() => {});
+    };
+    load();
+    const timer = setInterval(load, 2000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  });
 
   $effect(() => () => {
     if (customSaveTimer) clearTimeout(customSaveTimer);
@@ -463,27 +509,99 @@
       <p class="field-hint">{copy.settings.vrchat.contentHint}</p>
     </div>
 
+    {#if companion.settings.vrchat_osc_mode !== 'custom'}
+      <div class="osc-code">
+        <div class="osc-code-head">
+          <span>{copy.settings.vrchat.panelPreview}</span>
+        </div>
+        <pre class="osc-code-body osc-code-panel">{oscPreview.panel || '—'}</pre>
+      </div>
+      <p class="field-hint">
+        {oscPreview.connected
+          ? copy.settings.vrchat.customPreviewHint
+          : copy.settings.vrchat.customPlaceholdersHint}
+      </p>
+    {/if}
+
     {#if companion.settings.vrchat_osc_mode === 'custom'}
       <div class="field-block">
         <div class="field-head">
           <span class="field-title">{copy.settings.vrchat.customLabel}</span>
-          <span class="field-value">{oscCustomText.length}/108</span>
+          <span class="field-value">{oscCustomText.length}/160</span>
         </div>
         <Textarea
-          class="osc-textarea"
+          class="osc-textarea {customTooManyLines ? 'osc-textarea-invalid' : ''}"
           value={oscCustomText}
-          maxlength={108}
+          maxlength={160}
           rows={4}
           spellcheck={false}
           placeholder={copy.settings.vrchat.customPlaceholder}
           aria-label={copy.settings.vrchat.customLabel}
+          aria-invalid={customTooManyLines}
           oninput={(event) => scheduleCustomText(event.currentTarget.value)}
           onblur={commitCustomText}
         />
-        <p class="field-hint">{copy.settings.vrchat.customHint}</p>
+        <p class="field-hint">
+          <span class:invalid-hint={customTooManyLines}>{copy.settings.vrchat.customLineLimit}</span
+          >{copy.settings.vrchat.customHintRest}
+        </p>
+        <div class="osc-code">
+          <div class="osc-code-head">
+            <span
+              >{showPlaceholders
+                ? copy.settings.vrchat.customPlaceholders
+                : copy.settings.vrchat.customPreviewTitle}</span
+            >
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              class="osc-code-toggle"
+              onclick={toggleCustomPreview}
+            >
+              {showPlaceholders
+                ? copy.settings.vrchat.customTogglePreview
+                : copy.settings.vrchat.customTogglePlaceholders}
+            </Button>
+          </div>
+          {#if showPlaceholders}
+            <div class="osc-code-body osc-placeholder-grid">
+              {#each oscPreview.items as item (item.key)}
+                <div class="osc-placeholder-item">
+                  <code>{`{${item.key}}`}</code>
+                  <span>{item.value}</span>
+                </div>
+              {:else}
+                <span class="osc-placeholder-empty">—</span>
+              {/each}
+            </div>
+          {:else if customPreviewText.trim()}
+            <pre class="osc-code-body osc-code-preview">{customPreviewText}</pre>
+          {:else}
+            <pre class="osc-code-body osc-code-empty">{copy.settings.vrchat.customPreviewEmpty}</pre>
+          {/if}
+        </div>
+        {#if showPlaceholders}
+          <p class="field-hint">{copy.settings.vrchat.customPlaceholdersHint}</p>
+        {:else if customPreviewText.trim()}
+          <p class="field-hint">{copy.settings.vrchat.customPreviewHint}</p>
+        {/if}
       </div>
     {/if}
 
+    <div class="toggle-row">
+      <div class="toggle-copy">
+        <span class="toggle-title">{copy.settings.oscPush.enable}</span>
+        <span class="toggle-hint">{copy.settings.oscPush.enableHint}</span>
+      </div>
+      <Switch
+        checked={companion.settings.vrchat_osc_push_enabled}
+        onCheckedChange={setOscPushEnabled}
+        aria-label={copy.settings.oscPush.enable}
+      />
+    </div>
+
+    <p class="section-note">{copy.settings.oscPush.note}</p>
     <p class="section-note">{copy.settings.vrchat.note}</p>
   </section>
   </div>
@@ -759,6 +877,100 @@
 
   :global(.osc-textarea::placeholder) {
     color: #505d71;
+  }
+
+  :global(.osc-textarea-invalid) {
+    border-color: #d85c5c;
+    box-shadow: 0 0 0 1px rgb(216 92 92 / 35%);
+  }
+
+  .invalid-hint {
+    color: #ef7777;
+  }
+
+  .osc-code {
+    margin-top: 9px;
+    border: 1px solid rgb(255 255 255 / 8%);
+    border-radius: 7px;
+    background: rgb(0 0 0 / 18%);
+    overflow: hidden;
+  }
+
+  .osc-code-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 5px 7px 4px 10px;
+    border-bottom: 1px solid rgb(255 255 255 / 6%);
+    color: #8493a8;
+    font-size: 10.5px;
+  }
+
+  :global(.osc-code-toggle) {
+    height: 22px;
+    padding: 0 7px;
+    color: #aebdd2;
+    font-size: 10.5px;
+  }
+
+  .osc-code-body {
+    max-height: 320px;
+    margin: 0;
+    padding: 8px 10px;
+    overflow: auto;
+    color: #b9c8dc;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    line-height: 1.65;
+    white-space: pre;
+    text-align: center;
+  }
+
+  .osc-code-preview {
+    white-space: pre-wrap;
+    word-break: break-word;
+    text-align: center;
+  }
+
+  .osc-code-empty {
+    color: #66758a;
+    white-space: pre-wrap;
+    text-align: center;
+  }
+
+  .osc-placeholder-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 2px 18px;
+    text-align: left;
+    white-space: normal;
+  }
+
+  .osc-placeholder-item {
+    display: flex;
+    min-width: 0;
+    gap: 8px;
+    line-height: 1.65;
+  }
+
+  .osc-placeholder-item code {
+    flex: none;
+    min-width: 14ch;
+    color: #8ea5c4;
+    font-family: var(--font-mono);
+  }
+
+  .osc-placeholder-item span {
+    min-width: 0;
+    color: #b9c8dc;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+
+  .osc-placeholder-empty {
+    grid-column: 1 / -1;
+    color: #66758a;
   }
 
   :global(.osc-toggle) {

@@ -9,16 +9,23 @@
 
 use std::time::{Duration, Instant};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
 use crate::osc;
+use crate::settings::Settings;
 use crate::state::AppState;
 
 /// VRChat recommends refreshing the chatbox roughly every 1.5 seconds.
 const SEND_INTERVAL: Duration = Duration::from_millis(1500);
 /// A snapshot older than this means the remote page stopped reporting.
 const STATUS_MAX_AGE: Duration = Duration::from_secs(6);
+/// One-off quick-answer pushes scroll one character at a time. A slightly
+/// faster cadence stays within VRChat's five-messages-per-five-seconds limit.
+const PUSH_INTERVAL: Duration = Duration::from_millis(1100);
+const PUSH_INITIAL_TICKS: usize = 5;
+const PUSH_END_TICKS: usize = 4;
+const PUSH_TEXT_LIMIT: usize = 2000;
 /// Repeat the "waiting" panel slowly so it does not flood the chatbox.
 const WAITING_RESEND: Duration = Duration::from_secs(8);
 /// Base width of the decorated title rule. VRChat centres every chatbox line,
@@ -108,6 +115,164 @@ pub struct StatusSnapshot {
     pub status: RemoteStatus,
 }
 
+#[derive(Debug, Clone)]
+pub struct PushRequest {
+    pub text: String,
+}
+
+/// One selected answer becomes one plain paragraph: no newlines, tabs or
+/// repeated spaces are sent to the chatbox.
+fn collapse_push_text(raw: &str) -> String {
+    raw.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Queue a selected quick-answer paragraph for a one-off chatbox animation.
+pub fn handle_push_message(app: &AppHandle, message: &serde_json::Value) {
+    let Some(text) = message.get("text").and_then(|value| value.as_str()) else {
+        return;
+    };
+    // The page reports the rendered selection, not its Markdown source. Collapse
+    // every copied newline/whitespace run into one plain-text paragraph.
+    let text = collapse_push_text(text);
+    if text.chars().count() < 2 {
+        return;
+    }
+    let text: String = text.chars().take(PUSH_TEXT_LIMIT).collect();
+    let allowed = {
+        let state = app.state::<AppState>();
+        let runtime = state
+            .runtime
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        runtime.settings.vrchat_osc_enabled && runtime.settings.vrchat_osc_push_enabled
+    };
+    if !allowed {
+        return;
+    }
+    let state = app.state::<AppState>();
+    let mut push = state
+        .osc_push
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *push = Some(PushRequest { text });
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PushPhase {
+    Initial,
+    Scroll,
+    End,
+}
+
+struct PushAnimation {
+    chars: Vec<char>,
+    offset: usize,
+    phase: PushPhase,
+    ticks: usize,
+}
+
+impl PushAnimation {
+    fn new(text: String) -> Self {
+        Self {
+            chars: text.chars().collect(),
+            offset: 0,
+            phase: PushPhase::Initial,
+            ticks: 0,
+        }
+    }
+
+    fn visible(&self) -> String {
+        push_panel(&self.chars[self.offset..])
+    }
+
+    /// Advance one OSC frame; returns true when the final pause has elapsed.
+    fn advance(&mut self) -> bool {
+        self.ticks += 1;
+        match self.phase {
+            PushPhase::Initial => {
+                if self.ticks >= PUSH_INITIAL_TICKS {
+                    self.ticks = 0;
+                    if self.remaining_lines() <= 3 {
+                        self.phase = PushPhase::End;
+                    } else {
+                        self.phase = PushPhase::Scroll;
+                        self.offset = (self.offset + 1).min(self.chars.len());
+                    }
+                }
+            }
+            PushPhase::Scroll => {
+                self.offset = (self.offset + 1).min(self.chars.len());
+                if self.remaining_lines() <= 3 {
+                    self.phase = PushPhase::End;
+                    self.ticks = 0;
+                }
+            }
+            PushPhase::End => {
+                if self.ticks >= PUSH_END_TICKS {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    fn remaining_lines(&self) -> usize {
+        push_lines(&self.chars[self.offset..]).len()
+    }
+}
+
+fn push_panel(chars: &[char]) -> String {
+    let lines = push_lines(chars);
+    let more = lines.len() > 3;
+    let mut visible: Vec<String> = lines.into_iter().take(3).collect();
+    if more {
+        if let Some(last) = visible.last_mut() {
+            if display_width(last) + display_width_of(SCROLL_MARK) > CONTENT_LIMIT {
+                *last = take_width(last, CONTENT_LIMIT - display_width_of(SCROLL_MARK));
+            }
+            last.push(SCROLL_MARK);
+        }
+    }
+    visible.join("\n")
+}
+
+fn take_width(value: &str, max: usize) -> String {
+    let mut result = String::new();
+    let mut width = 0;
+    for ch in value.chars() {
+        let char_width = display_width_of(ch);
+        if width + char_width > max {
+            break;
+        }
+        result.push(ch);
+        width += char_width;
+    }
+    while result.ends_with(' ') {
+        result.pop();
+    }
+    result
+}
+
+fn push_lines(chars: &[char]) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    let mut width = 0;
+    for ch in chars {
+        let char_width = display_width_of(*ch);
+        if width + char_width > CONTENT_LIMIT && !line.is_empty() {
+            lines.push(line);
+            line = String::new();
+            width = 0;
+        }
+        line.push(*ch);
+        width += char_width;
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
+
 /// Store one status report from the remote page. Malformed reports are
 /// ignored: the next snapshot arrives one second later.
 pub fn handle_status_message(app: &AppHandle, message: &serde_json::Value) {
@@ -141,6 +306,9 @@ fn run(app: AppHandle) {
     let mut sender = osc::UdpSender::new();
     let mut waiting_since: Option<Instant> = None;
     let mut last_error: Option<(Instant, String)> = None;
+    let mut tick: usize = 0;
+    let mut push: Option<PushAnimation> = None;
+    let mut clear_after_push = false;
 
     loop {
         let (settings, remote_open) = {
@@ -152,14 +320,65 @@ fn run(app: AppHandle) {
             (runtime.settings.clone(), runtime.remote_url.is_some())
         };
 
+        if !settings.vrchat_osc_enabled {
+            let state = app.state::<AppState>();
+            let mut queued = state
+                .osc_push
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            *queued = None;
+            drop(queued);
+            sender.reset();
+            waiting_since = None;
+            last_error = None;
+            push = None;
+            clear_after_push = false;
+            std::thread::sleep(Duration::from_millis(400));
+            continue;
+        }
+
+        let new_push = {
+            let state = app.state::<AppState>();
+            let mut queued = state
+                .osc_push
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            queued.take()
+        };
+        if !settings.vrchat_osc_push_enabled {
+            push = None;
+        } else if let Some(request) = new_push {
+            if !request.text.trim().is_empty() {
+                push = Some(PushAnimation::new(request.text));
+            }
+        }
+
+        if let Some(animation) = push.as_mut() {
+            let text = animation.visible();
+            if text.trim().is_empty() {
+                push = None;
+                clear_after_push = true;
+            } else {
+                send_text(&mut sender, &settings, &text, &mut last_error);
+                waiting_since = None;
+                if animation.advance() {
+                    push = None;
+                    clear_after_push = true;
+                }
+            }
+            std::thread::sleep(PUSH_INTERVAL);
+            continue;
+        }
+
         let custom_mode = settings
             .vrchat_osc_mode
             .trim()
             .eq_ignore_ascii_case("custom");
-        if !settings.vrchat_osc_enabled || (!remote_open && !custom_mode) {
+        if !remote_open && !custom_mode {
             sender.reset();
             waiting_since = None;
             last_error = None;
+            clear_after_push = false;
             std::thread::sleep(Duration::from_millis(400));
             continue;
         }
@@ -172,35 +391,48 @@ fn run(app: AppHandle) {
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             slot.clone()
         };
+        let fresh = snapshot.filter(|snapshot| snapshot.at.elapsed() < STATUS_MAX_AGE);
 
         let (text, waiting) = if custom_mode {
+            let status = fresh
+                .as_ref()
+                .map(|snapshot| snapshot.status.clone())
+                .unwrap_or_default();
             (
                 format_panel(
-                    &RemoteStatus::default(),
+                    &status,
                     "custom",
                     &settings.language,
                     &settings.vrchat_osc_custom_text,
+                    tick,
                 ),
                 false,
             )
         } else {
-            match snapshot {
-                Some(snapshot) if snapshot.at.elapsed() < STATUS_MAX_AGE => (
+            match fresh {
+                Some(snapshot) => (
                     format_panel(
                         &snapshot.status,
                         &settings.vrchat_osc_mode,
                         &settings.language,
                         &settings.vrchat_osc_custom_text,
+                        tick,
                     ),
                     false,
                 ),
-                _ => (waiting_panel(&settings.language), true),
+                None => (waiting_panel(&settings.language), true),
             }
         };
+
         if text.trim().is_empty() {
+            if clear_after_push {
+                send_text(&mut sender, &settings, "", &mut last_error);
+                clear_after_push = false;
+            }
             std::thread::sleep(SEND_INTERVAL);
             continue;
         }
+        clear_after_push = false;
 
         let now = Instant::now();
         let should_send = !waiting
@@ -208,32 +440,41 @@ fn run(app: AppHandle) {
                 .map(|sent| now.duration_since(sent) >= WAITING_RESEND)
                 .unwrap_or(true);
         if should_send {
-            let message = osc::chatbox_message(&text);
-            match sender.send(
-                &settings.vrchat_osc_host,
-                settings.vrchat_osc_port,
-                &message,
-            ) {
-                Ok(()) => last_error = None,
-                Err(error) => {
-                    let should_log = last_error
-                        .as_ref()
-                        .map(|(at, previous)| {
-                            previous != &error || at.elapsed() >= Duration::from_secs(30)
-                        })
-                        .unwrap_or(true);
-                    if should_log {
-                        crate::logging::warn(&format!("VRChat OSC: {error}"));
-                        last_error = Some((now, error));
-                    }
-                }
-            }
+            send_text(&mut sender, &settings, &text, &mut last_error);
             if waiting {
                 waiting_since = Some(now);
             }
+            tick = tick.wrapping_add(1);
         }
 
         std::thread::sleep(SEND_INTERVAL);
+    }
+}
+
+fn send_text(
+    sender: &mut osc::UdpSender,
+    settings: &Settings,
+    text: &str,
+    last_error: &mut Option<(Instant, String)>,
+) {
+    let message = osc::chatbox_message(text);
+    match sender.send(
+        &settings.vrchat_osc_host,
+        settings.vrchat_osc_port,
+        &message,
+    ) {
+        Ok(()) => *last_error = None,
+        Err(error) => {
+            let now = Instant::now();
+            let should_log = last_error
+                .as_ref()
+                .map(|(at, previous)| previous != &error || at.elapsed() >= Duration::from_secs(30))
+                .unwrap_or(true);
+            if should_log {
+                crate::logging::warn(&format!("VRChat OSC: {error}"));
+                *last_error = Some((now, error));
+            }
+        }
     }
 }
 
@@ -310,15 +551,28 @@ pub fn format_panel(
     mode: &str,
     language: &str,
     custom_text: &str,
+    tick: usize,
 ) -> String {
     let lang = Lang::from_setting(language);
     match Mode::from_setting(mode) {
-        Mode::Clock => clock_panel(status, lang),
-        Mode::Music => music_panel(status, lang),
-        Mode::System => system_panel(status, lang),
-        Mode::Agent => agent_panel(status, lang),
-        Mode::Custom => crate::settings::sanitize_custom_text(custom_text),
+        Mode::Clock => clock_panel(status, lang, tick),
+        Mode::Music => music_panel(status, lang, tick),
+        Mode::System => system_panel(status, lang, tick),
+        Mode::Agent => agent_panel(status, lang, tick),
+        Mode::Custom => custom_panel(status, custom_text, lang, tick),
     }
+}
+
+fn custom_panel(status: &RemoteStatus, text: &str, lang: Lang, tick: usize) -> String {
+    let sanitized = crate::settings::sanitize_custom_text(text);
+    let expanded = expand_placeholders(&sanitized, Some(status), lang);
+    let lines: Vec<String> = expanded
+        .lines()
+        .take(4)
+        .map(|line| scroll_line(line, CONTENT_LIMIT, tick))
+        .collect();
+    let text = lines.join("\n");
+    text.chars().take(MESSAGE_LIMIT).collect()
 }
 
 fn waiting_panel(language: &str) -> String {
@@ -331,10 +585,11 @@ fn waiting_panel(language: &str) -> String {
             lang.pick("连接后显示状态", "Status appears after connecting")
                 .to_string(),
         ],
+        0,
     )
 }
 
-fn clock_panel(status: &RemoteStatus, lang: Lang) -> String {
+fn clock_panel(status: &RemoteStatus, lang: Lang, tick: usize) -> String {
     let heading = Mode::Clock.heading(lang);
     let time = clock_value(&status.time);
     let weekday = value_or(&status.weekday, "");
@@ -350,11 +605,11 @@ fn clock_panel(status: &RemoteStatus, lang: Lang) -> String {
 
     if !status.weather.loaded {
         lines.push(lang.pick("天气同步中", "Weather syncing").to_string());
-        return render_panel(&heading, lines);
+        return render_panel(&heading, lines, tick);
     }
     if !status.weather.available {
         lines.push(lang.pick("天气不可用", "Weather unavailable").to_string());
-        return render_panel(&heading, lines);
+        return render_panel(&heading, lines, tick);
     }
 
     let condition = format!(
@@ -383,10 +638,10 @@ fn clock_panel(status: &RemoteStatus, lang: Lang) -> String {
     }
     lines.push(third.join(" · "));
 
-    render_panel(&heading, lines)
+    render_panel(&heading, lines, tick)
 }
 
-fn music_panel(status: &RemoteStatus, lang: Lang) -> String {
+fn music_panel(status: &RemoteStatus, lang: Lang, tick: usize) -> String {
     let heading = Mode::Music.heading(lang);
     if !status.music.has {
         return render_panel(
@@ -397,6 +652,7 @@ fn music_panel(status: &RemoteStatus, lang: Lang) -> String {
                 lang.pick("打开播放器后显示", "Play something to show it here")
                     .to_string(),
             ],
+            tick,
         );
     }
 
@@ -413,7 +669,7 @@ fn music_panel(status: &RemoteStatus, lang: Lang) -> String {
         (true, true) => lang.pick("未知艺术家", "Unknown artist").to_string(),
     };
 
-    render_panel(&heading, vec![song, second, progress_line(status)])
+    render_panel(&heading, vec![song, second, progress_line(status)], tick)
 }
 
 fn progress_line(status: &RemoteStatus) -> String {
@@ -435,7 +691,7 @@ fn progress_line(status: &RemoteStatus) -> String {
     format!("{mark} {bar} {times}")
 }
 
-fn system_panel(status: &RemoteStatus, lang: Lang) -> String {
+fn system_panel(status: &RemoteStatus, lang: Lang, tick: usize) -> String {
     let heading = Mode::System.heading(lang);
     let cpu_model = short_model(&status.system.cpu_model, 21);
     let cpu_name = if cpu_model.is_empty() {
@@ -481,7 +737,7 @@ fn system_panel(status: &RemoteStatus, lang: Lang) -> String {
         ));
     }
 
-    render_panel_with_limit(&heading, lines, 4)
+    render_panel_with_limit(&heading, lines, 4, tick)
 }
 
 fn memory_stat(label: &str, percent: Option<f64>, used: Option<f64>, total: Option<f64>) -> String {
@@ -494,7 +750,7 @@ fn memory_stat(label: &str, percent: Option<f64>, used: Option<f64>, total: Opti
     }
 }
 
-fn agent_panel(status: &RemoteStatus, lang: Lang) -> String {
+fn agent_panel(status: &RemoteStatus, lang: Lang, tick: usize) -> String {
     let heading = Mode::Agent.heading(lang);
     let agent = &status.agent;
     let busy = agent.running > 0 || agent.waiting > 0;
@@ -567,7 +823,7 @@ fn agent_panel(status: &RemoteStatus, lang: Lang) -> String {
         ));
     }
 
-    render_panel(&heading, lines)
+    render_panel(&heading, lines, tick)
 }
 
 fn weather_label(code: Option<i64>, lang: Lang) -> &'static str {
@@ -629,15 +885,20 @@ enum WeatherGroup {
     Unknown,
 }
 
-fn render_panel(title: &str, lines: Vec<String>) -> String {
-    render_panel_with_limit(title, lines, 3)
+fn render_panel(title: &str, lines: Vec<String>, tick: usize) -> String {
+    render_panel_with_limit(title, lines, 3, tick)
 }
 
-fn render_panel_with_limit(title: &str, lines: Vec<String>, max_lines: usize) -> String {
+fn render_panel_with_limit(
+    title: &str,
+    lines: Vec<String>,
+    max_lines: usize,
+    tick: usize,
+) -> String {
     let lines: Vec<String> = lines
         .into_iter()
         .take(max_lines)
-        .map(|line| truncate_display(&clean_line(&line), CONTENT_LIMIT))
+        .map(|line| scroll_line(&clean_line(&line), CONTENT_LIMIT, tick))
         .filter(|line| !line.is_empty())
         .collect();
 
@@ -718,6 +979,52 @@ fn truncate_display(value: &str, max: usize) -> String {
         result.pop();
     }
     result.push_str("..");
+    result
+}
+
+const SCROLL_STEP: usize = 2;
+const SCROLL_MARK: char = '…';
+/// Gap between two copies of a scrolling line. The window is taken from a
+/// cyclic copy so the next copy enters before the previous one has fully left.
+const SCROLL_GAP: &str = "        ";
+
+/// Show a moving window of an over-long line. The text is treated as a cyclic
+/// stream of `line + gap`; the ellipsis is always shown on the right, and the
+/// next copy enters through the gap instead of waiting for a blank reset.
+fn scroll_line(value: &str, max: usize, tick: usize) -> String {
+    if display_width(value) <= max {
+        return value.to_string();
+    }
+    if max < 4 {
+        return truncate_display(value, max);
+    }
+    let chars: Vec<char> = value.chars().collect();
+    if chars.is_empty() {
+        return String::new();
+    }
+    let gap: Vec<char> = SCROLL_GAP.chars().collect();
+    let cycle_len = chars.len() + gap.len();
+    let start = tick.saturating_mul(SCROLL_STEP) % cycle_len;
+    let budget = max.saturating_sub(display_width_of(SCROLL_MARK));
+    let mut result = String::new();
+    let mut width = 0;
+    let mut index = 0;
+    while index < cycle_len {
+        let position = (start + index) % cycle_len;
+        let ch = if position < chars.len() {
+            chars[position]
+        } else {
+            gap[position - chars.len()]
+        };
+        let char_width = display_width_of(ch);
+        if width + char_width > budget {
+            break;
+        }
+        result.push(ch);
+        width += char_width;
+        index += 1;
+    }
+    result.push(SCROLL_MARK);
     result
 }
 
@@ -941,6 +1248,287 @@ fn format_money(value: f64) -> String {
     text.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct PlaceholderPreview {
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OscPreview {
+    pub connected: bool,
+    pub items: Vec<PlaceholderPreview>,
+    pub panel: String,
+}
+
+const PLACEHOLDER_KEYS: [&str; 17] = [
+    "time",
+    "date",
+    "weekday",
+    "location",
+    "weather",
+    "temperature",
+    "song",
+    "artist",
+    "cpu",
+    "cpu_usage",
+    "gpu",
+    "gpu_usage",
+    "ram",
+    "vram",
+    "agent",
+    "balance",
+    "today_spend",
+];
+
+/// Values shown under the custom textarea. When the remote page is not
+/// connected the UI gets a deterministic example, while the actual chatbox
+/// falls back to `--` instead of inventing data.
+pub fn preview(language: &str, status: Option<&RemoteStatus>) -> OscPreview {
+    let lang = Lang::from_setting(language);
+    let sample = example_status(lang);
+    let source = status.unwrap_or(&sample);
+    OscPreview {
+        connected: status.is_some(),
+        items: placeholder_values(Some(source), lang)
+            .into_iter()
+            .map(|(key, value)| PlaceholderPreview {
+                key: key.to_string(),
+                value,
+            })
+            .collect(),
+        panel: String::new(),
+    }
+}
+
+/// First frame of the panel that the selected mode would send. The UI uses
+/// this for the built-in modes; scrolling starts only for real sends.
+pub fn panel_preview(
+    status: Option<&RemoteStatus>,
+    mode: &str,
+    language: &str,
+    custom_text: &str,
+) -> String {
+    let lang = Lang::from_setting(language);
+    let sample = example_status(lang);
+    let source = status.unwrap_or(&sample);
+    format_panel(source, mode, language, custom_text, 0)
+}
+
+fn expand_placeholders(text: &str, status: Option<&RemoteStatus>, lang: Lang) -> String {
+    let mut result = text.to_string();
+    for (key, value) in placeholder_values(status, lang) {
+        result = result.replace(&format!("{{{key}}}"), &value);
+    }
+    result
+}
+
+fn placeholder_values(status: Option<&RemoteStatus>, lang: Lang) -> Vec<(&'static str, String)> {
+    let Some(status) = status else {
+        return PLACEHOLDER_KEYS
+            .iter()
+            .map(|key| (*key, "--".to_string()))
+            .collect();
+    };
+    let weather = &status.weather;
+    let music = &status.music;
+    let system = &status.system;
+    let agent = &status.agent;
+    let unit = unit_suffix(&weather.unit);
+    let available = weather.loaded && weather.available;
+    let weather_label = if available {
+        weather_label(weather.code, lang).to_string()
+    } else {
+        "--".to_string()
+    };
+    let temperature = if available {
+        format_temperature(weather.temperature, unit)
+    } else {
+        "--".to_string()
+    };
+    let cpu = if system.cpu_model.trim().is_empty() {
+        "--".to_string()
+    } else {
+        short_model(&system.cpu_model, 21)
+    };
+    let gpu = if system.gpu_ok && !system.gpu_name.trim().is_empty() {
+        short_model(&system.gpu_name, 21)
+    } else {
+        "--".to_string()
+    };
+    let agent_state = if agent.running > 0 || agent.waiting > 0 {
+        lang.pick("工作中", "Working").to_string()
+    } else {
+        lang.pick("闲置", "Idle").to_string()
+    };
+    let balance = if agent.account_loaded && agent.signed_in {
+        agent
+            .balance
+            .map(|value| {
+                format!(
+                    "{}{}",
+                    currency_symbol(&agent.currency),
+                    format_money(value)
+                )
+            })
+            .unwrap_or_else(|| "--".to_string())
+    } else {
+        "--".to_string()
+    };
+    let today_spend = agent
+        .today_spend
+        .map(|value| {
+            format!(
+                "{}{}",
+                currency_symbol(&agent.currency),
+                format_money(value)
+            )
+        })
+        .unwrap_or_else(|| "--".to_string());
+
+    vec![
+        (
+            "time",
+            if status.time.trim().is_empty() {
+                "--".to_string()
+            } else {
+                clock_value(&status.time)
+            },
+        ),
+        (
+            "date",
+            if status.date.trim().is_empty() {
+                "--".to_string()
+            } else {
+                status.date.clone()
+            },
+        ),
+        (
+            "weekday",
+            if status.weekday.trim().is_empty() {
+                "--".to_string()
+            } else {
+                status.weekday.clone()
+            },
+        ),
+        (
+            "location",
+            if weather.location.trim().is_empty() {
+                "--".to_string()
+            } else {
+                weather.location.clone()
+            },
+        ),
+        ("weather", weather_label),
+        ("temperature", temperature),
+        (
+            "song",
+            if music.has {
+                value_or(&music.title, "--").to_string()
+            } else {
+                "--".to_string()
+            },
+        ),
+        (
+            "artist",
+            if music.has {
+                value_or(&music.artist, "--").to_string()
+            } else {
+                "--".to_string()
+            },
+        ),
+        ("cpu", cpu),
+        ("cpu_usage", format_percent(system.cpu_usage)),
+        ("gpu", gpu),
+        (
+            "gpu_usage",
+            if system.gpu_ok {
+                format_percent(system.gpu_usage)
+            } else {
+                "--".to_string()
+            },
+        ),
+        (
+            "ram",
+            memory_value(system.mem_percent, system.mem_used, system.mem_total),
+        ),
+        (
+            "vram",
+            if system.gpu_ok {
+                memory_value(system.vram_percent, system.vram_used, system.vram_total)
+            } else {
+                "--".to_string()
+            },
+        ),
+        ("agent", agent_state),
+        ("balance", balance),
+        ("today_spend", today_spend),
+    ]
+}
+
+fn memory_value(percent: Option<f64>, used: Option<f64>, total: Option<f64>) -> String {
+    let percent = format_percent(percent);
+    let capacity = format_capacity(used, total);
+    if capacity == "--" {
+        percent
+    } else {
+        format!("{percent} {capacity}")
+    }
+}
+
+fn example_status(lang: Lang) -> RemoteStatus {
+    let gib = 1024.0 * 1024.0 * 1024.0;
+    RemoteStatus {
+        date: "2026-01-01".to_string(),
+        weekday: lang.pick("周一", "Mon").to_string(),
+        time: "14:30".to_string(),
+        weather: WeatherStatus {
+            loaded: true,
+            available: true,
+            location: lang.pick("上海", "Shanghai").to_string(),
+            code: Some(0),
+            is_day: Some(true),
+            temperature: Some(18.0),
+            high: Some(21.0),
+            low: Some(12.0),
+            unit: "C".to_string(),
+        },
+        music: MusicStatus {
+            has: true,
+            title: lang.pick("歌曲名", "Song title").to_string(),
+            artist: lang.pick("歌手", "Artist").to_string(),
+            album: String::new(),
+            playing: true,
+            position: None,
+            duration: None,
+        },
+        system: SystemStatus {
+            cpu_model: "AMD Ryzen 7 5700X3D".to_string(),
+            cpu_usage: Some(42.0),
+            mem_used: Some(13.0 * gib),
+            mem_total: Some(32.0 * gib),
+            mem_percent: Some(39.0),
+            gpu_ok: true,
+            gpu_name: "AMD Radeon RX 7800 XT".to_string(),
+            gpu_usage: Some(61.0),
+            vram_used: Some(4.0 * gib),
+            vram_total: Some(8.0 * gib),
+            vram_percent: Some(52.0),
+        },
+        agent: AgentStatus {
+            running: 0,
+            waiting: 0,
+            errors: 0,
+            account_loaded: true,
+            signed_in: true,
+            low_balance: false,
+            balance: Some(12.5),
+            currency: "CNY".to_string(),
+            today_spend: Some(2.0),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1018,7 +1606,7 @@ mod tests {
         let status = sample_status();
         for mode in ["clock", "music", "system", "agent"] {
             for language in ["zh", "en"] {
-                let text = format_panel(&status, mode, language, "");
+                let text = format_panel(&status, mode, language, "", 0);
                 assert_panel(&text);
                 let content = text.lines().count() - 1;
                 let limit = if mode == "system" { 4 } else { 3 };
@@ -1030,7 +1618,7 @@ mod tests {
 
     #[test]
     fn clock_panel_shows_time_weather_and_temperatures() {
-        let text = format_panel(&sample_status(), "clock", "zh", "");
+        let text = format_panel(&sample_status(), "clock", "zh", "", 0);
         assert!(text.contains("⏱ 时间天气"), "{text}");
         assert!(text.contains("02:51"), "{text}");
         assert!(!text.contains("02:51:47"), "{text}");
@@ -1042,7 +1630,7 @@ mod tests {
 
     #[test]
     fn music_panel_shows_icon_song_and_progress() {
-        let text = format_panel(&sample_status(), "music", "zh", "");
+        let text = format_panel(&sample_status(), "music", "zh", "", 0);
         assert!(text.contains("♪ 正在播放"), "{text}");
         assert!(text.contains("标准外"), "{text}");
         assert!(text.contains("Arboi氩男孩"), "{text}");
@@ -1052,7 +1640,7 @@ mod tests {
 
     #[test]
     fn system_panel_separates_models_and_groups_memory() {
-        let text = format_panel(&sample_status(), "system", "en", "");
+        let text = format_panel(&sample_status(), "system", "en", "", 0);
         assert!(text.contains("■ CPU 13th Gen i7-13700K"), "{text}");
         assert!(text.contains("42% · RAM 39% 13/32G"), "{text}");
         assert!(text.contains("▤ GPU RTX 3060"), "{text}");
@@ -1063,7 +1651,7 @@ mod tests {
 
     #[test]
     fn agent_panel_shows_state_balance_and_today_spend() {
-        let text = format_panel(&sample_status(), "agent", "zh", "");
+        let text = format_panel(&sample_status(), "agent", "zh", "", 0);
         assert!(text.contains("★ 大肥鱼"), "{text}");
         assert!(text.contains("● 工作中"), "{text}");
         assert!(text.contains("余额 ¥12.34"), "{text}");
@@ -1081,7 +1669,7 @@ mod tests {
         status.system.cpu_model = "C".repeat(200);
         status.system.gpu_name = "G".repeat(200);
         for mode in ["clock", "music", "system", "agent"] {
-            let text = format_panel(&status, mode, "en", "");
+            let text = format_panel(&status, mode, "en", "", 0);
             assert_panel(&text);
         }
     }
@@ -1090,7 +1678,7 @@ mod tests {
     fn missing_status_degrades_to_placeholders() {
         let status = RemoteStatus::default();
         for mode in ["clock", "music", "system", "agent"] {
-            let text = format_panel(&status, mode, "en", "");
+            let text = format_panel(&status, mode, "en", "", 0);
             assert_panel(&text);
         }
     }
@@ -1107,8 +1695,8 @@ mod tests {
     fn unknown_mode_falls_back_to_clock() {
         let status = sample_status();
         assert_eq!(
-            format_panel(&status, "unknown", "en", ""),
-            format_panel(&status, "clock", "en", "")
+            format_panel(&status, "unknown", "en", "", 0),
+            format_panel(&status, "clock", "en", "", 0)
         );
     }
 
@@ -1186,18 +1774,109 @@ mod tests {
     fn music_panel_switches_between_play_and_pause_marks() {
         let mut status = sample_status();
         status.music.playing = true;
-        assert!(format_panel(&status, "music", "en", "").contains("▶ "));
+        assert!(format_panel(&status, "music", "en", "", 0).contains("▶ "));
         status.music.playing = false;
-        assert!(format_panel(&status, "music", "en", "").contains("⏸ "));
+        assert!(format_panel(&status, "music", "en", "", 0).contains("⏸ "));
     }
 
     #[test]
     fn custom_panel_is_raw_text_without_decoration() {
         let raw = "  第一行  \n第二行";
-        let text = format_panel(&RemoteStatus::default(), "custom", "zh", raw);
+        let text = format_panel(&RemoteStatus::default(), "custom", "zh", raw, 0);
         assert_eq!(text, raw);
         assert!(!text.contains('•'));
         assert!(!text.contains('«'));
+    }
+
+    #[test]
+    fn long_lines_scroll_with_an_ellipsis() {
+        let text = "一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十";
+        let cycle_len = text.chars().count() + SCROLL_GAP.chars().count();
+        let mut frames = Vec::new();
+        for tick in 0..cycle_len {
+            let frame = scroll_line(text, CONTENT_LIMIT, tick);
+            assert!(frame.ends_with('…'), "{frame}");
+            assert!(display_width(&frame) <= CONTENT_LIMIT, "{frame}");
+            frames.push(frame);
+        }
+        assert_ne!(frames[0], frames[1]);
+        assert!(
+            frames.iter().any(|frame| frame.contains(SCROLL_GAP)),
+            "{frames:?}"
+        );
+        assert_eq!(scroll_line("short", CONTENT_LIMIT, 9), "short");
+    }
+
+    #[test]
+    fn custom_text_expands_placeholders_from_status() {
+        let status = sample_status();
+        let text = format_panel(
+            &status,
+            "custom",
+            "zh",
+            "{song} - {artist}\n{time} {weather} {temperature}",
+            0,
+        );
+        assert!(text.contains("标准外 - Arboi氩男孩"), "{text}");
+        assert!(text.contains("02:51 多云 18°C"), "{text}");
+        assert!(!text.contains("{song}"), "{text}");
+    }
+
+    #[test]
+    fn preview_switches_between_examples_and_current_status() {
+        let examples = preview("zh", None);
+        assert!(!examples.connected);
+        assert_eq!(examples.items.len(), PLACEHOLDER_KEYS.len());
+        assert!(examples
+            .items
+            .iter()
+            .any(|item| item.key == "temperature" && item.value == "18°C"));
+
+        let status = sample_status();
+        let current = preview("zh", Some(&status));
+        assert!(current.connected);
+        assert!(current
+            .items
+            .iter()
+            .any(|item| item.key == "song" && item.value == "标准外"));
+    }
+
+    #[test]
+    fn push_panel_is_three_unadorned_lines_and_scrolls() {
+        let text = "一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十";
+        let chars: Vec<char> = text.chars().collect();
+        let first = push_panel(&chars);
+        assert_eq!(first.lines().count(), 3, "{first}");
+        assert!(first.ends_with('…'), "{first}");
+        assert!(!first.contains('•'));
+        assert!(!first.contains('«'));
+        for line in first.lines() {
+            assert!(display_width(line) <= CONTENT_LIMIT, "{line}");
+        }
+
+        let mut animation = PushAnimation::new(text.to_string());
+        for _ in 0..PUSH_INITIAL_TICKS {
+            let _ = animation.advance();
+        }
+        let second = animation.visible();
+        assert_ne!(first, second);
+        assert!(second.ends_with('…'), "{second}");
+
+        while animation.phase != PushPhase::End {
+            let _ = animation.advance();
+        }
+        let end = animation.visible();
+        assert!(!end.ends_with('…'), "{end}");
+        let short: Vec<char> = "短文本".chars().collect();
+        assert!(!push_panel(&short).ends_with('…'));
+    }
+
+    #[test]
+    fn push_text_is_collapsed_to_one_plain_paragraph() {
+        assert_eq!(
+            collapse_push_text("第一段\n\n第二段\t第三段   "),
+            "第一段 第二段 第三段"
+        );
     }
 
     #[test]

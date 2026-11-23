@@ -65,6 +65,7 @@ pub fn run() {
             commands::refresh_remote,
             commands::capture_remote_backdrop,
             commands::set_chrome_overlay,
+            commands::get_osc_preview,
             commands::quit_app,
         ])
         .setup(|app| {
@@ -93,6 +94,7 @@ pub fn run() {
                 bridge: bridge_info,
                 capture_lock: Arc::new(Mutex::new(())),
                 remote_status: Mutex::new(None),
+                osc_push: Mutex::new(None),
             });
 
             bridge::start(app.handle().clone(), listener);

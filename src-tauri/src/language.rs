@@ -83,6 +83,7 @@ fn handle_message(app: &AppHandle, text: &str) {
     match value.get("type").and_then(|value| value.as_str()) {
         Some("companion-ui") => handle_ui_message(app, &value),
         Some("companion-status") => crate::vrchat::handle_status_message(app, &value),
+        Some("osc-push") => crate::vrchat::handle_push_message(app, &value),
         _ => {}
     }
 }

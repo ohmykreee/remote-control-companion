@@ -41,4 +41,6 @@ pub struct AppState {
     pub capture_lock: Arc<Mutex<()>>,
     /// Latest status report from the remote page for the VRChat chatbox panel.
     pub remote_status: Mutex<Option<crate::vrchat::StatusSnapshot>>,
+    /// One-off chatbox push requested by selecting text on the remote page.
+    pub osc_push: Mutex<Option<crate::vrchat::PushRequest>>,
 }

@@ -205,6 +205,7 @@ pub fn state_script(settings: &Settings, url: &tauri::Url) -> String {
         "origin": url.origin().ascii_serialization(),
         "microphoneLabel": settings.microphone_label,
         "reduceMotion": settings.reduce_motion,
+        "oscPush": settings.vrchat_osc_push_enabled,
     });
 
     include_str!("../assets/remote_bootstrap.js")

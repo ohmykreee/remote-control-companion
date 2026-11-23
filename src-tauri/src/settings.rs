@@ -27,12 +27,13 @@ pub struct Settings {
     pub vrchat_osc_port: u16,
     pub vrchat_osc_mode: String,
     pub vrchat_osc_custom_text: String,
+    pub vrchat_osc_push_enabled: bool,
 }
 
 pub const MIN_WINDOW_OPACITY: u8 = 5;
 pub const EDGE_SIDES: [&str; 3] = ["top", "left", "right"];
 pub const VRC_OSC_MODES: [&str; 5] = ["clock", "music", "system", "agent", "custom"];
-pub const VRC_OSC_CUSTOM_MAX_CHARS: usize = 108;
+pub const VRC_OSC_CUSTOM_MAX_CHARS: usize = 160;
 pub const VRC_OSC_CUSTOM_MAX_LINES: usize = 4;
 pub const DEFAULT_VRC_OSC_HOST: &str = "127.0.0.1";
 pub const DEFAULT_VRC_OSC_PORT: u16 = 9000;
@@ -61,6 +62,7 @@ impl Default for Settings {
             vrchat_osc_port: DEFAULT_VRC_OSC_PORT,
             vrchat_osc_mode: DEFAULT_VRC_OSC_MODE.to_string(),
             vrchat_osc_custom_text: String::new(),
+            vrchat_osc_push_enabled: false,
         }
     }
 }
@@ -121,7 +123,7 @@ impl Settings {
 }
 
 /// Custom chatbox text is shown as-is: keep the user's line breaks and spaces,
-/// but cap it at four lines / 108 characters so the full message stays inside
+/// but cap it at four lines / 160 characters; long lines scroll in the chatbox
 /// VRChat's 144-character limit.
 pub fn sanitize_custom_text(raw: &str) -> String {
     let normalized = raw.replace("\r\n", "\n").replace('\r', "\n");

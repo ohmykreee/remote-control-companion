@@ -369,4 +369,114 @@
     // Chatbox status is best-effort.
   }
 
+  var installOscPush = function () {
+    if (!config.oscPush) return;
+    var button = null;
+    var selectedText = '';
+
+    var hide = function () {
+      if (button) {
+        button.remove();
+        button = null;
+      }
+      selectedText = '';
+    };
+
+    var inAnswer = function (node) {
+      if (!node) return false;
+      var element = node.nodeType === 1 ? node : node.parentElement;
+      return !!(element && element.closest && element.closest('.quickqa-chat-assistant'));
+    };
+
+    var show = function (rect) {
+      if (!button) {
+        button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'dsh-osc-push';
+        button.style.cssText =
+          'position:fixed;z-index:2147483647;border:1px solid rgba(255,255,255,.45);border-radius:999px;' +
+          'background:#2563eb;color:#ffffff;font-family:inherit;font-size:12px;font-weight:600;line-height:1.2;' +
+          'padding:7px 11px;box-shadow:0 0 0 2px rgba(37,99,235,.35),0 8px 22px rgba(0,0,0,.45);' +
+          'text-shadow:0 1px 1px rgba(0,0,0,.22);cursor:pointer;user-select:none;-webkit-user-select:none;';
+        button.addEventListener('click', function (event) {
+          event.preventDefault();
+          event.stopPropagation();
+          if (selectedText) sendToCompanion({ type: 'osc-push', text: selectedText });
+          try {
+            window.getSelection().removeAllRanges();
+          } catch (_) {}
+          hide();
+        });
+        document.body.appendChild(button);
+      }
+      var english =
+        String(document.documentElement.lang || '')
+          .toLowerCase()
+          .indexOf('en') === 0;
+      button.textContent = english ? 'Push to OSC' : '推送到 OSC';
+      var left = Math.min(Math.max(8, rect.left + rect.width / 2 - 44), window.innerWidth - 96);
+      var top = rect.bottom + 8;
+      if (top + 32 > window.innerHeight) top = Math.max(8, rect.top - 40);
+      button.style.left = left + 'px';
+      button.style.top = top + 'px';
+    };
+
+    var checkSelection = function () {
+      try {
+        var selection = window.getSelection();
+        if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return hide();
+        var range = selection.getRangeAt(0);
+        if (!inAnswer(range.startContainer) || !inAnswer(range.endContainer)) return hide();
+        // Selection.toString() is the rendered answer text, not the Markdown
+        // source. Collapse every copied newline/whitespace run so the pushed
+        // content is one plain paragraph.
+        var text = selection.toString().replace(/\s+/g, ' ').trim();
+        if (text.length < 2) return hide();
+        selectedText = text.slice(0, 2000);
+        var rect = range.getBoundingClientRect();
+        if (!rect || (!rect.width && !rect.height)) {
+          var rects = range.getClientRects();
+          if (!rects.length) return hide();
+          rect = rects[rects.length - 1];
+        }
+        show(rect);
+      } catch (_) {
+        hide();
+      }
+    };
+
+    document.addEventListener(
+      'mouseup',
+      function () {
+        setTimeout(checkSelection, 0);
+      },
+      true
+    );
+    document.addEventListener(
+      'keyup',
+      function () {
+        setTimeout(checkSelection, 0);
+      },
+      true
+    );
+    document.addEventListener(
+      'mousedown',
+      function (event) {
+        if (button && event.target !== button) hide();
+      },
+      true
+    );
+    document.addEventListener('scroll', hide, true);
+    window.addEventListener('resize', hide);
+    document.addEventListener('selectionchange', function () {
+      var selection = window.getSelection();
+      if (!selection || selection.isCollapsed) hide();
+    });
+  };
+  try {
+    installOscPush();
+  } catch (_) {
+    // The selection button is optional; the page keeps working without it.
+  }
+
 })();

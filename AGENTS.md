@@ -271,8 +271,9 @@ Tauri 命令里直接调用 `Window::add_child` / `Webview::set_size` 会在某�
 ### VRChat OSC 聊天框
 
 - 设置字段：`vrchat_osc_enabled`、`vrchat_osc_host`（默认 `127.0.0.1`）、`vrchat_osc_port`（默认 `9000`）、
-  `vrchat_osc_mode`（`clock` / `music` / `system` / `agent` / `custom`）、`vrchat_osc_custom_text`。
-  这些字段由后台线程每轮重新读取，修改后立即生效，不需要刷新或重连远控页面。
+  `vrchat_osc_mode`（`clock` / `music` / `system` / `agent` / `custom`）、`vrchat_osc_custom_text`、
+  `vrchat_osc_push_enabled`。这些字段由后台线程每轮重新读取，修改后立即生效；`vrchat_osc_push_enabled`
+  需要刷新一次远控页面，选中回答的推送按钮才会按新配置出现。
 - 数据只来自远控页面的 `window.__DSH_REMOTE__`：`remote_bootstrap.js` 每秒把时间、天气、媒体、性能、
   会话与余额裁剪成 `companion-status` 消息；`language.rs` 的消息监听转给
   `vrchat::handle_status_message`。不要为这些信息另开系统 API，也不要读取 dsh-remote-control 的内部实现。
@@ -280,8 +281,29 @@ Tauri 命令里直接调用 `Window::add_child` / `Webview::set_size` 会在某�
   固定四行（CPU 型号、CPU 与内存、GPU 型号、GPU 与显存），共五行。VRChat 聊天框按行居中，所以
   **不要加左右竖线，也不要用行尾空格对齐**；标题两侧的 `·=` 花纹必须对称，标题用 `« »` 框住。
   所有文案跟随 `settings.language`，中英文标题、状态和天气标签都在 `vrchat.rs` 内。
-- `custom` 模式**不加任何装饰**：直接发送 `vrchat_osc_custom_text`，最多 4 行、108 个字符（`settings.rs`
+- 单行超过 27 列时由 `scroll_line` 取 `line + 8 个空格` 的循环窗口，右端始终显示 `…`，每帧移动 2 个
+  字符；下一份文字在上一份离开前通过间隔进入，不要等整行完全消失后重置。每一行独立滚动；自定义行也走同一套
+  逻辑。快速问答的三行阅读动画是独立行为，不套用这个窗口循环。
+- `custom` 模式**不加任何装饰**：直接发送 `vrchat_osc_custom_text`，最多 4 行、160 个字符（`settings.rs`
   的 `sanitize_custom_text`），空内容不发送。自定义文字不依赖远控页面，没有连接页面时也可以持续显示。
+- 自定义文字支持 `{time}`、`{date}`、`{weekday}`、`{location}`、`{weather}`、`{temperature}`、`{song}`、
+  `{artist}`、`{cpu}`、`{cpu_usage}`、`{gpu}`、`{gpu_usage}`、`{ram}`、`{vram}`、`{agent}`、`{balance}`、
+  `{today_spend}`。实际发送时从当前状态替换，未连接远控时显示 `--`；`get_osc_preview` 供设置页显示当前值，
+  未连接时返回示例值。设置页 codeblock 在文字为空时列出全部占位符，有文字时显示替换预览；右上角切换按钮可在
+  两种视图间手动切换，预览由前端每 2 秒刷新。
+  占位符列表固定两列；面板预览和文字预览居中显示，占位符列表保持左对齐。
+- 内置模式也使用同一个 `panel_preview` 生成 codeblock 预览（tick 0，长行显示省略号）；设置页每 2 秒刷新一次。
+  预览只是展示，不进入 OSC 发送队列。
+- 快速问答推送开关放在同一张 VRChat OSC 卡片内。`remote_bootstrap.js` 只在 `config.oscPush` 为真时监听
+  `.quickqa-chat-assistant` 中的文字选择，显示原生悬浮按钮并通过 `osc-push` 消息发送选中文本；这是注入脚本的
+  行为部分，不新增第二个信息注入。按钮使用高对比度蓝底白字。选择文本取自 **渲染后的 DOM**
+  （`selection.toString()`），不要读取 `quickQa.answer` 的 Markdown 源；已用 marked 渲染的标题、粗体、
+  列表、引用、链接和代码块验证，选择结果不含 `#`、`**`、反引号、列表符号或 URL。换行和连续空白在 JS 与
+  Rust 两侧都折叠为一个空格，推送始终是单段纯文本。
+- `osc-push` 由 `language.rs` 交给 `vrchat::handle_push_message`，文本折叠为单行并最多 2000 字符，存入
+  `AppState.osc_push`。后台线程临时用它覆盖普通面板：固定三行、无标题/装饰，先停留 5 帧供阅读，再每帧滚动
+  1 个字符，最后停留 4 帧后恢复；推送帧间隔 1.1 秒。若后面仍有文字，末行显示 `…`；滚到剩余不超过三行时去掉
+  省略号并进入结尾停顿。推送结束后若普通内容为空，要发送一次空聊天框消息清除。
 - 整条消息必须 ≤ 144 字符（VRChat 聊天框上限）；单行文字留有截断保护，标题规则也受同一预算约束。
   发送频率固定约 1.5 秒，符合 VRChat 约 5 条 / 5 秒的限制；不要改成逐帧或明显更快的刷新。
 - `osc.rs` 只实现最小的 `/chatbox/input` 编码：地址、`,sT`（立即发送）和字符串参数，四项对齐补零；
@@ -323,6 +345,8 @@ pnpm dlx shadcn-svelte@latest add <component> --overwrite --yes
   设置页的「显示内容」使用 ToggleGroup 做分段选择，不要退回下拉菜单或手写分段控件。
 - `components.json` 的 style 使用生成器支持的 `nova`。`$lib/utils.ts` 的 `cn` 来自 `cn` 包。
 - 图标只用 `@lucide/svelte`；不要画自定义功能图标、不要 emoji。
+- 设置页的 codeblock 是展示用 `<pre>`，shadcn 没有对应组件；它的切换按钮、Textarea、Switch 等交互控件仍必须
+  使用 shadcn。注入到远控页面的“推送到 OSC”悬浮按钮只能使用原生 `<button>`，不能把本地 Svelte 组件带进页面。
 - 界面保持小而安静：初始窗口只有左侧连接、右侧设置；不要再加入大段装饰、状态卡堆叠或第二个主按钮。
 - 应用/任务栏图标来自 dsh-remote-control 图标，并在右下角叠加一个小播放徽标；通过
   `pnpm tauri icon src-tauri/icons/icon.svg` 从该 SVG 生成全套图标。
@@ -371,9 +395,14 @@ pnpm dlx shadcn-svelte@latest add <component> --overwrite --yes
     `▶` / `⏸` 状态图标和实时进度刷新。
   - 已验证单次注入同时处理 `companion-status` 轮询、`companion-ui` 语言/主题钩子与 reduce-motion；
     VR 截图 API 只在设置开启时作为单独的第二个注入出现。
+  - 已用本地 UDP mock 验证长行省略号滚动、自定义行滚动、占位符替换和 codeblock 预览；也验证了快速问答
+    推送的三行显示、初始停留、逐字滚动、结尾停留和恢复原内容。
 - 本地 mock 远控页：`node test/mock-remote.mjs`，默认 `http://127.0.0.1:39001/`；页面会显示
   `isSecureContext`、伴侣 API 是否可用、麦克风与截图结果，并提供 `window.__DSH_REMOTE__` 假数据，
   用于不连接真实远控页面时测试 VRChat OSC 面板。
+- OSC 接收 mock：`node scripts/dsh-osc-mock.mjs` 按时间顺序打印 `/chatbox/input`；加 `--live` 后每次收到
+  消息先清空终端，只重绘最新一条，模拟 VRChat 聊天框替换内容的效果。它是开发工具，不进入测试套件或 CI；
+  默认监听 `127.0.0.1:9000`，VRChat 运行时需先关闭游戏或改用其他端口。
 - VRChat OSC 的本机测试：游戏内开启 OSC 后，在设置中开启「VRChat OSC 展示」并选择内容；默认发到
   `127.0.0.1:9000`。没有真实远控页面时可以先用上面的 mock 页，聊天框会显示它的假数据。
 - 调试 WebView（仅开发构建）：直接运行 `pnpm dev:tauri`。本地 chrome 使用 DevTools 端口 `9222`，

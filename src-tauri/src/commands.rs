@@ -175,6 +175,36 @@ fn go_home_blocking(app: AppHandle) -> Result<LayoutState, String> {
 }
 
 #[tauri::command]
+pub fn get_osc_preview(app: AppHandle) -> crate::vrchat::OscPreview {
+    let (settings, snapshot) = {
+        let state = app.state::<AppState>();
+        let settings = state
+            .runtime
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .settings
+            .clone();
+        let snapshot = state
+            .remote_status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        (settings, snapshot)
+    };
+    let status = snapshot
+        .filter(|snapshot| snapshot.at.elapsed() < Duration::from_secs(6))
+        .map(|snapshot| snapshot.status);
+    let mut preview = crate::vrchat::preview(&settings.language, status.as_ref());
+    preview.panel = crate::vrchat::panel_preview(
+        status.as_ref(),
+        &settings.vrchat_osc_mode,
+        &settings.language,
+        &settings.vrchat_osc_custom_text,
+    );
+    preview
+}
+
+#[tauri::command]
 pub async fn open_remote(
     app: AppHandle,
     address: String,

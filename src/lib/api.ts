@@ -24,6 +24,7 @@ export interface Settings {
   vrchat_osc_port: number;
   vrchat_osc_mode: VrchatOscMode;
   vrchat_osc_custom_text: string;
+  vrchat_osc_push_enabled: boolean;
 }
 
 export interface AppInfo {
@@ -39,6 +40,17 @@ export interface LayoutState {
   address: string;
   secure_context_applied: boolean;
   force_secure_context: boolean;
+}
+
+export interface OscPlaceholderPreview {
+  key: string;
+  value: string;
+}
+
+export interface OscPreview {
+  connected: boolean;
+  items: OscPlaceholderPreview[];
+  panel: string;
 }
 
 export interface Bootstrap {
@@ -69,6 +81,7 @@ export const DEFAULT_SETTINGS: Settings = {
   vrchat_osc_port: 9000,
   vrchat_osc_mode: 'clock',
   vrchat_osc_custom_text: '',
+  vrchat_osc_push_enabled: false,
 };
 
 export const api = {
@@ -80,6 +93,7 @@ export const api = {
     invoke<LayoutState>('open_remote', { address, remember }),
   refreshRemote: () => invoke<LayoutState>('refresh_remote'),
   captureRemoteBackdrop: () => invoke<string | null>('capture_remote_backdrop'),
+  getOscPreview: () => invoke<OscPreview>('get_osc_preview'),
   setOverlay: (active: boolean) => invoke<LayoutState>('set_chrome_overlay', { active }),
   quitApp: () => invoke<void>('quit_app'),
 };
